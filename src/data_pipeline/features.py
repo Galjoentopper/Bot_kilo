@@ -1,0 +1,415 @@
+"""
+Feature Engineering Module
+==========================
+
+Generates technical indicators and features for the crypto trading bot.
+Optimized for GPU training with Paperspace Gradient.
+"""
+
+import pandas as pd
+import numpy as np
+from typing import Dict, List, Optional, Tuple
+import logging
+from scipy import stats
+import warnings
+warnings.filterwarnings('ignore')
+
+logger = logging.getLogger(__name__)
+
+class FeatureEngine:
+    """
+    Feature engineering class for generating technical indicators and market features.
+    """
+    
+    def __init__(self, config: Optional[Dict] = None):
+        """
+        Initialize FeatureEngine with configuration.
+        
+        Args:
+            config: Configuration dictionary with feature parameters
+        """
+        self.config = config or self._get_default_config()
+        logger.info("FeatureEngine initialized")
+    
+    def _get_default_config(self) -> Dict:
+        """Get default feature engineering configuration."""
+        return {
+            'sma_periods': [5, 10, 20, 50],
+            'ema_periods': [5, 10, 20, 50],
+            'rsi_period': 14,
+            'macd_fast': 12,
+            'macd_slow': 26,
+            'macd_signal': 9,
+            'bollinger_period': 20,
+            'bollinger_std': 2,
+            'atr_period': 14,
+            'stoch_k_period': 14,
+            'stoch_d_period': 3,
+            'cci_period': 20,
+            'returns_periods': [1, 5, 15],
+            'volatility_periods': [10, 20, 50],
+            'include_hour': True,
+            'include_day_of_week': True,
+            'include_month': True
+        }
+    
+    def generate_all_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Generate all features for the input DataFrame.
+        
+        Args:
+            df: Input DataFrame with OHLCV data
+            
+        Returns:
+            DataFrame with all engineered features
+        """
+        if df.empty:
+            logger.warning("Empty DataFrame provided to feature engine")
+            return df
+        
+        logger.info(f"Generating features for {len(df)} records")
+        
+        # Create a copy to avoid modifying original data
+        features_df = df.copy()
+        
+        # Price-based features
+        features_df = self._add_price_features(features_df)
+        
+        # Technical indicators
+        features_df = self._add_technical_indicators(features_df)
+        
+        # Volume features
+        features_df = self._add_volume_features(features_df)
+        
+        # Volatility features
+        features_df = self._add_volatility_features(features_df)
+        
+        # Momentum features
+        features_df = self._add_momentum_features(features_df)
+        
+        # Time-based features
+        features_df = self._add_time_features(features_df)
+        
+        # Custom features
+        features_df = self._add_custom_features(features_df)
+        
+        # Remove any infinite or NaN values
+        features_df = features_df.replace([np.inf, -np.inf], np.nan)
+        
+        # Log feature generation summary
+        original_cols = len(df.columns)
+        new_cols = len(features_df.columns)
+        logger.info(f"Generated {new_cols - original_cols} new features")
+        
+        return features_df
+    
+    def _add_price_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Add price-based features."""
+        # Basic price features
+        df['hl_avg'] = (df['high'] + df['low']) / 2
+        df['hlc_avg'] = (df['high'] + df['low'] + df['close']) / 3
+        df['ohlc_avg'] = (df['open'] + df['high'] + df['low'] + df['close']) / 4
+        
+        # Price ranges
+        df['price_range'] = df['high'] - df['low']
+        df['price_range_pct'] = df['price_range'] / df['close']
+        
+        # Body and shadow features
+        df['body'] = abs(df['close'] - df['open'])
+        df['body_pct'] = df['body'] / df['close']
+        df['upper_shadow'] = df['high'] - np.maximum(df['open'], df['close'])
+        df['lower_shadow'] = np.minimum(df['open'], df['close']) - df['low']
+        df['upper_shadow_pct'] = df['upper_shadow'] / df['close']
+        df['lower_shadow_pct'] = df['lower_shadow'] / df['close']
+        
+        # Returns for different periods
+        for period in self.config['returns_periods']:
+            df[f'return_{period}'] = df['close'].pct_change(period)
+            df[f'log_return_{period}'] = np.log(df['close'] / df['close'].shift(period))
+            df[f'high_return_{period}'] = df['high'].pct_change(period)
+            df[f'low_return_{period}'] = df['low'].pct_change(period)
+        
+        return df
+    
+    def _add_technical_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Add technical indicators."""
+        # Simple Moving Averages
+        for period in self.config['sma_periods']:
+            df[f'sma_{period}'] = df['close'].rolling(window=period).mean()
+            df[f'sma_{period}_ratio'] = df['close'] / df[f'sma_{period}']
+        
+        # Exponential Moving Averages
+        for period in self.config['ema_periods']:
+            df[f'ema_{period}'] = df['close'].ewm(span=period).mean()
+            df[f'ema_{period}_ratio'] = df['close'] / df[f'ema_{period}']
+        
+        # RSI
+        df['rsi'] = self._calculate_rsi(df['close'], self.config['rsi_period'])
+        
+        # MACD
+        macd_line, macd_signal, macd_histogram = self._calculate_macd(
+            df['close'], 
+            self.config['macd_fast'], 
+            self.config['macd_slow'], 
+            self.config['macd_signal']
+        )
+        df['macd'] = macd_line
+        df['macd_signal'] = macd_signal
+        df['macd_histogram'] = macd_histogram
+        
+        # Bollinger Bands
+        bb_upper, bb_middle, bb_lower = self._calculate_bollinger_bands(
+            df['close'], 
+            self.config['bollinger_period'], 
+            self.config['bollinger_std']
+        )
+        df['bb_upper'] = bb_upper
+        df['bb_middle'] = bb_middle
+        df['bb_lower'] = bb_lower
+        df['bb_width'] = (bb_upper - bb_lower) / bb_middle
+        df['bb_position'] = (df['close'] - bb_lower) / (bb_upper - bb_lower)
+        
+        # ATR (Average True Range)
+        df['atr'] = self._calculate_atr(df, self.config['atr_period'])
+        df['atr_pct'] = df['atr'] / df['close']
+        
+        # Stochastic Oscillator
+        stoch_k, stoch_d = self._calculate_stochastic(
+            df, 
+            self.config['stoch_k_period'], 
+            self.config['stoch_d_period']
+        )
+        df['stoch_k'] = stoch_k
+        df['stoch_d'] = stoch_d
+        
+        # CCI (Commodity Channel Index)
+        df['cci'] = self._calculate_cci(df, self.config['cci_period'])
+        
+        return df
+    
+    def _add_volume_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Add volume-based features."""
+        # Volume moving averages
+        df['volume_sma_10'] = df['volume'].rolling(window=10).mean()
+        df['volume_sma_20'] = df['volume'].rolling(window=20).mean()
+        df['volume_ratio'] = df['volume'] / df['volume_sma_20']
+        
+        # Volume-price features
+        df['vwap'] = (df['volume'] * df['hlc_avg']).cumsum() / df['volume'].cumsum()
+        df['volume_price_trend'] = df['volume'] * (df['close'] - df['open'])
+        
+        # On-Balance Volume (OBV)
+        df['obv'] = self._calculate_obv(df)
+        
+        # Volume Rate of Change
+        df['volume_roc_5'] = df['volume'].pct_change(5)
+        df['volume_roc_10'] = df['volume'].pct_change(10)
+        
+        return df
+    
+    def _add_volatility_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Add volatility-based features."""
+        for period in self.config['volatility_periods']:
+            # Rolling standard deviation
+            df[f'volatility_{period}'] = df['return_1'].rolling(window=period).std()
+            
+            # Historical volatility (annualized)
+            df[f'hist_vol_{period}'] = df[f'volatility_{period}'] * np.sqrt(365 * 24 * 4)  # 15-min intervals
+            
+            # Parkinson volatility (high-low based)
+            log_hl_ratio = pd.Series(np.log(df['high'] / df['low']), index=df.index)
+            df[f'parkinson_vol_{period}'] = np.sqrt(
+                (log_hl_ratio ** 2).rolling(window=period).mean() / (4 * np.log(2))
+            )
+        
+        # Volatility ratios
+        df['vol_ratio_10_20'] = df['volatility_10'] / df['volatility_20']
+        df['vol_ratio_20_50'] = df['volatility_20'] / df['volatility_50']
+        
+        return df
+    
+    def _add_momentum_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Add momentum-based features."""
+        # Rate of Change
+        for period in [5, 10, 20]:
+            df[f'roc_{period}'] = ((df['close'] - df['close'].shift(period)) / df['close'].shift(period)) * 100
+        
+        # Momentum
+        for period in [5, 10, 20]:
+            df[f'momentum_{period}'] = df['close'] - df['close'].shift(period)
+        
+        # Williams %R
+        for period in [14, 21]:
+            df[f'williams_r_{period}'] = self._calculate_williams_r(df, period)
+        
+        return df
+    
+    def _add_time_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Add time-based features."""
+        if self.config['include_hour'] and hasattr(df.index, 'hour'):
+            df['hour'] = df.index.hour
+            df['hour_sin'] = np.sin(2 * np.pi * df['hour'] / 24)
+            df['hour_cos'] = np.cos(2 * np.pi * df['hour'] / 24)
+        
+        if self.config['include_day_of_week'] and hasattr(df.index, 'dayofweek'):
+            df['day_of_week'] = df.index.dayofweek
+            df['dow_sin'] = np.sin(2 * np.pi * df['day_of_week'] / 7)
+            df['dow_cos'] = np.cos(2 * np.pi * df['day_of_week'] / 7)
+        
+        if self.config['include_month'] and hasattr(df.index, 'month'):
+            df['month'] = df.index.month
+            df['month_sin'] = np.sin(2 * np.pi * df['month'] / 12)
+            df['month_cos'] = np.cos(2 * np.pi * df['month'] / 12)
+        
+        # Market session features
+        if hasattr(df.index, 'dayofweek'):
+            df['is_weekend'] = (df.index.dayofweek >= 5).astype(int)
+        if hasattr(df.index, 'hour'):
+            df['is_night'] = ((df.index.hour >= 22) | (df.index.hour <= 6)).astype(int)
+        
+        return df
+    
+    def _add_custom_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Add custom engineered features."""
+        # Price relative to moving averages
+        if 'sma_20' in df.columns:
+            df['price_above_sma20'] = (df['close'] > df['sma_20']).astype(int)
+        if 'ema_20' in df.columns:
+            df['price_above_ema20'] = (df['close'] > df['ema_20']).astype(int)
+        
+        # Moving average crosses
+        if 'sma_5' in df.columns and 'sma_20' in df.columns:
+            df['sma_cross'] = (df['sma_5'] > df['sma_20']).astype(int)
+        if 'ema_5' in df.columns and 'ema_20' in df.columns:
+            df['ema_cross'] = (df['ema_5'] > df['ema_20']).astype(int)
+        
+        # RSI signals
+        if 'rsi' in df.columns:
+            df['rsi_oversold'] = (df['rsi'] < 30).astype(int)
+            df['rsi_overbought'] = (df['rsi'] > 70).astype(int)
+        
+        # MACD signals
+        if 'macd' in df.columns and 'macd_signal' in df.columns:
+            df['macd_bullish'] = (df['macd'] > df['macd_signal']).astype(int)
+        
+        # Bollinger Band signals
+        if 'bb_position' in df.columns:
+            df['bb_squeeze'] = (df['bb_width'] < df['bb_width'].rolling(20).mean()).astype(int)
+            df['bb_breakout_upper'] = (df['close'] > df['bb_upper']).astype(int)
+            df['bb_breakout_lower'] = (df['close'] < df['bb_lower']).astype(int)
+        
+        # Volume confirmation
+        if 'volume_ratio' in df.columns:
+            df['high_volume'] = (df['volume_ratio'] > 1.5).astype(int)
+            df['low_volume'] = (df['volume_ratio'] < 0.5).astype(int)
+        
+        return df
+    
+    # Technical indicator calculation methods
+    def _calculate_rsi(self, prices: pd.Series, period: int = 14) -> pd.Series:
+        """Calculate RSI."""
+        delta = prices.diff()
+        gain = delta.where(delta > 0, 0.0).rolling(window=period).mean()
+        loss = (-delta.where(delta < 0, 0.0)).rolling(window=period).mean()
+        rs = gain / loss
+        return 100 - (100 / (1 + rs))
+    
+    def _calculate_macd(self, prices: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9) -> Tuple[pd.Series, pd.Series, pd.Series]:
+        """Calculate MACD."""
+        ema_fast = prices.ewm(span=fast).mean()
+        ema_slow = prices.ewm(span=slow).mean()
+        macd_line = ema_fast - ema_slow
+        macd_signal = macd_line.ewm(span=signal).mean()
+        macd_histogram = macd_line - macd_signal
+        return macd_line, macd_signal, macd_histogram
+    
+    def _calculate_bollinger_bands(self, prices: pd.Series, period: int = 20, std_dev: float = 2) -> Tuple[pd.Series, pd.Series, pd.Series]:
+        """Calculate Bollinger Bands."""
+        middle = prices.rolling(window=period).mean()
+        std = prices.rolling(window=period).std()
+        upper = middle + (std * std_dev)
+        lower = middle - (std * std_dev)
+        return upper, middle, lower
+    
+    def _calculate_atr(self, df: pd.DataFrame, period: int = 14) -> pd.Series:
+        """Calculate Average True Range."""
+        high_low = df['high'] - df['low']
+        high_close = np.abs(df['high'] - df['close'].shift())
+        low_close = np.abs(df['low'] - df['close'].shift())
+        true_range = pd.Series(np.maximum(high_low, np.maximum(high_close, low_close)), index=df.index)
+        return true_range.rolling(window=period).mean()
+    
+    def _calculate_stochastic(self, df: pd.DataFrame, k_period: int = 14, d_period: int = 3) -> Tuple[pd.Series, pd.Series]:
+        """Calculate Stochastic Oscillator."""
+        lowest_low = df['low'].rolling(window=k_period).min()
+        highest_high = df['high'].rolling(window=k_period).max()
+        k_percent = 100 * ((df['close'] - lowest_low) / (highest_high - lowest_low))
+        d_percent = k_percent.rolling(window=d_period).mean()
+        return k_percent, d_percent
+    
+    def _calculate_cci(self, df: pd.DataFrame, period: int = 20) -> pd.Series:
+        """Calculate Commodity Channel Index."""
+        typical_price = (df['high'] + df['low'] + df['close']) / 3
+        sma = typical_price.rolling(window=period).mean()
+        mean_deviation = typical_price.rolling(window=period).apply(lambda x: np.abs(x - x.mean()).mean())
+        return (typical_price - sma) / (0.015 * mean_deviation)
+    
+    def _calculate_obv(self, df: pd.DataFrame) -> pd.Series:
+        """Calculate On-Balance Volume."""
+        obv = pd.Series(index=df.index, dtype=float)
+        obv.iloc[0] = df['volume'].iloc[0]
+        
+        for i in range(1, len(df)):
+            if df['close'].iloc[i] > df['close'].iloc[i-1]:
+                obv.iloc[i] = obv.iloc[i-1] + df['volume'].iloc[i]
+            elif df['close'].iloc[i] < df['close'].iloc[i-1]:
+                obv.iloc[i] = obv.iloc[i-1] - df['volume'].iloc[i]
+            else:
+                obv.iloc[i] = obv.iloc[i-1]
+        
+        return obv
+    
+    def _calculate_williams_r(self, df: pd.DataFrame, period: int = 14) -> pd.Series:
+        """Calculate Williams %R."""
+        highest_high = df['high'].rolling(window=period).max()
+        lowest_low = df['low'].rolling(window=period).min()
+        return -100 * ((highest_high - df['close']) / (highest_high - lowest_low))
+    
+    def get_feature_names(self, df: pd.DataFrame) -> List[str]:
+        """Get list of all feature column names."""
+        # Original OHLCV columns
+        original_cols = ['open', 'high', 'low', 'close', 'volume', 'quote_volume', 
+                        'trades', 'taker_buy_base', 'taker_buy_quote']
+        
+        # Return only the engineered features
+        feature_cols = [col for col in df.columns if col not in original_cols]
+        return feature_cols
+    
+    def prepare_model_input(self, df: pd.DataFrame, sequence_length: int = 20) -> Tuple[np.ndarray, List[str]]:
+        """
+        Prepare data for model input with proper scaling and windowing.
+        
+        Args:
+            df: DataFrame with features
+            sequence_length: Length of sequences for GRU model
+            
+        Returns:
+            Tuple of (feature_array, feature_names)
+        """
+        # Get feature columns (exclude original OHLCV)
+        feature_cols = self.get_feature_names(df)
+        
+        # Select only numeric features and drop NaN
+        feature_df = df[feature_cols].select_dtypes(include=[np.number])
+        feature_df = feature_df.dropna()
+        
+        if feature_df.empty:
+            logger.warning("No valid features after preprocessing")
+            return np.array([]), []
+        
+        # Convert to numpy array
+        feature_array = feature_df.values
+        
+        logger.info(f"Prepared {feature_array.shape[1]} features for {feature_array.shape[0]} samples")
+        
+        return feature_array, list(feature_df.columns)

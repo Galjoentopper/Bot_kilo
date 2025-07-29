@@ -1,0 +1,128 @@
+# Crypto Trading Bot Configuration
+# ================================
+
+# Data Configuration
+data:
+  symbols: ["BTCEUR", "SOLEUR", "ADAEUR", "XRPEUR", "ETHEUR"]
+  interval: "15m"
+  data_dir: "./data"
+  start_date: "2020-01-01"
+  
+# Model Configuration
+models:
+  gru:
+    sequence_length: 20
+    hidden_size: 128
+    num_layers: 2
+    dropout: 0.2
+    learning_rate: 0.001
+    batch_size: 64
+    epochs: 100
+    early_stopping_patience: 10
+    
+  lightgbm:
+    num_leaves: 31
+    max_depth: 6
+    learning_rate: 0.1
+    n_estimators: 100
+    boosting_type: "gbdt"
+    objective: "regression"
+    metric: "rmse"
+    
+  ppo:
+    learning_rate: 0.0003
+    n_steps: 2048
+    batch_size: 64
+    n_epochs: 10
+    gamma: 0.99
+    gae_lambda: 0.95
+    clip_range: 0.2
+    ent_coef: 0.01
+    vf_coef: 0.5
+
+# Feature Engineering
+features:
+  technical_indicators:
+    sma_periods: [5, 10, 20, 50]
+    ema_periods: [5, 10, 20, 50]
+    rsi_period: 14
+    macd_fast: 12
+    macd_slow: 26
+    macd_signal: 9
+    bollinger_period: 20
+    bollinger_std: 2
+    atr_period: 14
+    stoch_k_period: 14
+    stoch_d_period: 3
+    cci_period: 20
+    
+  price_features:
+    returns_periods: [1, 5, 15]
+    volatility_periods: [10, 20, 50]
+    
+  time_features:
+    include_hour: true
+    include_day_of_week: true
+    include_month: true
+
+# Trading Configuration
+trading:
+  initial_balance: 10000.0
+  max_position_size: 0.1  # 10% of portfolio
+  transaction_fee: 0.001  # 0.1%
+  slippage: 0.0005  # 0.05%
+  
+# Risk Management
+risk:
+  max_drawdown: 0.15  # 15%
+  stop_loss: 0.05  # 5%
+  take_profit: 0.10  # 10%
+  position_sizing: "kelly"  # kelly, fixed, volatility
+
+# Backtesting
+backtesting:
+  train_ratio: 0.7
+  validation_ratio: 0.15
+  test_ratio: 0.15
+  walk_forward_steps: 30  # days
+  
+# Performance Metrics
+metrics:
+  target_sharpe_ratio: 1.0
+  max_acceptable_drawdown: 0.20
+  min_win_rate: 0.45
+
+# API Configuration
+api:
+  bitvavo:
+    base_url: "https://api.bitvavo.com/v2"
+    rate_limit: 1000  # requests per minute
+    timeout: 30
+    
+# Notifications
+notifications:
+  telegram:
+    enabled: true
+    chat_id: ""  # To be set via environment variable
+    bot_token: ""  # To be set via environment variable
+    
+# Logging
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "logs/trading_bot.log"
+  max_file_size: "10MB"
+  backup_count: 5
+
+# MLflow Tracking
+mlflow:
+  tracking_uri: "./mlruns"
+  experiment_name: "crypto_trading_bot"
+  
+# GPU/Training Configuration (Paperspace Gradient optimized)
+training:
+  device: "cuda"  # Will auto-detect GPU availability
+  mixed_precision: true  # For faster training on modern GPUs
+  num_workers: 4  # Data loading workers
+  pin_memory: true  # For GPU training optimization
+  gradient_checkpointing: true  # Memory optimization for large models

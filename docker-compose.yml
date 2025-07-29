@@ -1,0 +1,76 @@
+version: '3.8'
+
+services:
+  crypto-trading-bot:
+    build: .
+    container_name: crypto-trading-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data:ro
+      - ./models:/app/models
+      - ./logs:/app/logs
+      - ./mlruns:/app/mlruns
+    environment:
+      - PYTHONPATH=/app
+      - CUDA_VISIBLE_DEVICES=0
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    command: ["python3.10", "scripts/trader.py", "--interval", "15"]
+    healthcheck:
+      test: ["CMD", "python3.10", "-c", "import sys; sys.exit(0)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  trainer:
+    build: .
+    container_name: crypto-trainer
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data:ro
+      - ./models:/app/models
+      - ./logs:/app/logs
+      - ./mlruns:/app/mlruns
+    environment:
+      - PYTHONPATH=/app
+      - CUDA_VISIBLE_DEVICES=0
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    command: ["python3.10", "scripts/trainer.py", "--model", "all"]
+    profiles:
+      - training
+
+  mlflow:
+    image: python:3.10-slim
+    container_name: mlflow-server
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./mlruns:/mlflow/mlruns
+    working_dir: /mlflow
+    command: >
+      bash -c "
+        pip install mlflow &&
+        mlflow server --host 0.0.0.0 --port 5000 --backend-store-uri file:///mlflow/mlruns
+      "
+    profiles:
+      - mlflow
+
+volumes:
+  models:
+  logs:
+  mlruns:

@@ -1,0 +1,161 @@
+Crypto Trading Bot Development Plan
+
+1. Objective
+- Build a short-term crypto trading bot leveraging a hybrid ML approach for robust performance.
+
+2. Model Architecture
+- Sequence Model: GRU for short-term price prediction.
+- Feature Model: LightGBM using engineered technical indicators.
+- RL Strategy: PPO for trade execution and position sizing.
+
+3. Technologies & Libraries
+- Programming language: Python 3.10+
+- Data handling: pandas, numpy
+- Sequence model: PyTorch (GRU)
+- Feature model: LightGBM
+- RL agent: Stable Baselines3 (PPO)
+- Exchange API: bitvavo-python, requests
+- Notification: python-telegram-bot
+- Experiment tracking: MLflow, Weights & Biases (optional)
+- Configuration: PyYAML
+- Testing: pytest
+- Deployment: Docker
+
+4. Data Pipeline
+- Collect and preprocess 15-minute interval OHLCV market data for BTCEUR, SOLEUR, ADAEUR, XRPEUR, ETHEUR from Bitvavo.
+- Feature Engineering:
+    - Price-based features: OHLCV, returns, log returns, percent change
+    - Technical indicators: SMA, EMA, RSI, MACD, Bollinger Bands, ATR, Stochastic Oscillator, CCI, OBV
+    - Order book features: bid/ask spread, order book imbalance, volume at price levels
+    - Volatility features: rolling std of returns, historical volatility, price range
+    - Momentum features: momentum, rate of change
+    - Time features: time of day, day of week
+    - Custom features: price relative to moving average, indicator crosses, signal combinations
+- Input/Output specs:
+    - Raw data: CSV format [timestamp, open, high, low, close, volume] per asset
+    - Engineered features: pandas DataFrame
+    - Model input: N x F numpy arrays (windowed features)
+    - Model output: [price, probability, action]
+
+5. Model Training & Evaluation
+- Data Preparation:
+    - Load 15-min OHLCV data for BTCEUR, SOLEUR, ADAEUR, XRPEUR, ETHEUR.
+    - Calculate engineered features and technical indicators.
+    - Handle missing data, outliers, and normalize/scale features.
+    - Chronological split into train/validation/test sets to prevent lookahead bias.
+
+- Sequence Model (GRU):
+    - Window input: Use past N intervals (e.g., last 20 x 15-min features) as input.
+    - Output: Next interval price or classification (up/down).
+    - Architecture: 1–2 GRU layers, dropout for regularization, dense output.
+    - Loss: Mean Squared Error (regression) or Binary Cross-Entropy (classification).
+    - Optimization: Adam optimizer, learning rate scheduling, early stopping based on validation loss.
+    - Hyperparameter tuning: Grid or random search for sequence length, hidden units, dropout, learning rate.
+    - Model checkpointing and logging for reproducibility.
+
+- Feature Model (LightGBM):
+    - Input: Engineered features, technical indicators, outputs from GRU model.
+    - Output: Predict short-term movement, probability, or return.
+    - Loss: Log loss (classification) or RMSE (regression).
+    - Optimization: Early stopping, hyperparameter tuning (number of leaves, max depth, learning rate, boosting type).
+    - Feature importance analysis to refine engineering.
+    - Cross-validation using walk-forward or expanding window methodology.
+
+- RL Model (PPO):
+    - Environment: Simulated trading environment with realistic market conditions (slippage, fees).
+    - State: Latest engineered features, GRU/LightGBM predictions.
+    - Action: Buy/sell/hold, position size.
+    - Reward: PnL, risk-adjusted metrics.
+    - Training: Multiple episodes over historical data, exploration vs. exploitation balance.
+    - Optimization: Tune PPO hyperparameters (gamma, lambda, clip ratio, batch size, learning rate).
+    - Regular evaluation and checkpointing.
+
+- Combined/Stacked Model Flow:
+    - GRU model generates short-term predictions.
+    - LightGBM refines predictions using technical features and GRU outputs.
+    - PPO agent receives combined outputs and features for decision making.
+
+- Evaluation & Monitoring:
+    - Backtest all models on the test set (walk-forward validation).
+    - Metrics: Sharpe ratio, max drawdown, win rate, cumulative return, confusion matrix.
+    - Visualize equity curve, prediction accuracy, feature importance.
+    - Experiment logging with MLflow or Weights & Biases.
+
+- Automation & Maintenance:
+    - Automated scripts for retraining periodically with new data.
+    - Modular trainer classes for each model (GRU, LightGBM, PPO).
+    - Version control for datasets, models, and experiment configs.
+    - Unit tests for data pipeline and trainers.
+
+- Documentation:
+    - Notebooks/scripts for EDA, feature engineering, model training.
+    - README and docstrings for maintainability.
+
+6. RL Strategy Integration
+- Use PPO agent to decide buy/sell/hold and position sizing based on model signals.
+- Simulate market environment for RL training.
+- Implement risk management and position sizing rules.
+
+7. Deployment
+- Paper trading for validation using Bitvavo API.
+- Live deployment with Bitvavo exchange API integration.
+- Real-time monitoring and logging.
+- Runtime: Local or Dockerized container.
+
+8. Notifications
+- Integrate Telegram notifier for trade signals and status updates for the paper trader.
+- Telegram messages: Text notifications for trade events and errors.
+- Add optional Slack/email notifications for critical alerts.
+
+9. Maintenance & Iteration
+- Periodic retraining with new data.
+- Continuous backtesting and parameter tuning.
+
+10. Data Requirements
+- Crypto pairs: BTCEUR, SOLEUR, ADAEUR, XRPEUR, ETHEUR
+- Data type: 15-min OHLCV, order book, trade history
+- Technical indicators: RSI, MACD, MA, Bollinger Bands, etc.
+- Time range: 1–2 years recommended
+
+11. Security & Secrets Management
+- Secrets (API keys, tokens) stored in `.env` files and loaded securely.
+- Never commit credentials to version control.
+- Use environment variables or a secrets manager for deployment.
+
+12. Configuration Management
+- All configs stored in `src/config/config.yaml`
+- Configurable parameters: asset list, model hyperparameters, notification channels
+
+13. Error Handling & Edge Cases
+- Retry failed API calls up to 3 times
+- Log all errors to `logs/`
+- Skip intervals with missing data, notify via Telegram
+
+14. Module Interfaces
+- `Trainer.train(data: pd.DataFrame) -> TrainedModel`
+- `Trader.run(model: TrainedModel) -> None`
+- `Notifier.send(msg: str) -> None`
+
+15. Testing & Validation
+- Unit tests for all modules (`tests/`)
+- Backtest results must log Sharpe ratio, max drawdown
+- All code must pass tests before deployment
+
+16. Example Data Row
+timestamp, open, high, low, close, volume
+2024-01-01 00:00, 41000.0, 41100.0, 40900.0, 41050.0, 1.52
+
+17. Documentation Style
+- Docstrings for all public functions/classes
+- README with setup, usage, and troubleshooting
+- Inline comments for complex logic
+
+18. Project Goals
+- Bot must achieve Sharpe ratio > 1.0 in backtests
+- Telegram notifications must be instant (<5s latency)
+- All code must pass tests before deployment
+
+19. Next Steps
+- Set up repository structure.
+- Assign tasks for each step.
+- Draft initial code and documentation.
