@@ -1,3 +1,6 @@
+# Local package installation (install in editable mode)
+-e .
+
 # Core dependencies
 python-dotenv>=1.0.0
 pandas>=2.0.0
