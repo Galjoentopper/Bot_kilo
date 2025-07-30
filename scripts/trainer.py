@@ -16,9 +16,7 @@ from typing import Dict, Any, Optional
 import pandas as pd
 import numpy as np
 
-# Add src to path
-sys.path.append(str(Path(__file__).parent.parent / 'src'))
-
+# Import from installed package
 from src.utils.logger import setup_logging, TradingBotLogger
 from src.data_pipeline.loader import DataLoader
 from src.data_pipeline.features import FeatureEngine
