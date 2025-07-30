@@ -10,11 +10,13 @@ try:
     import gymnasium as gym
     from gymnasium import spaces
     GYM_AVAILABLE = True
+    BaseEnv = gym.Env
 except ImportError:
     try:
         import gym  # type: ignore
         from gym import spaces  # type: ignore
         GYM_AVAILABLE = True
+        BaseEnv = gym.Env  # type: ignore
     except ImportError:
         # Create dummy classes for type hints when gym is not available
         class _DummyBox:
@@ -44,6 +46,7 @@ except ImportError:
         
         spaces = _DummySpaces()  # type: ignore
         gym = _DummyGym()  # type: ignore
+        BaseEnv = _DummyEnv
         GYM_AVAILABLE = False
 import numpy as np
 import pandas as pd
@@ -52,7 +55,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-class TradingEnvironment:
+class TradingEnvironment(BaseEnv):
     """
     Gym-compatible trading environment for crypto trading.
     """
@@ -79,12 +82,9 @@ class TradingEnvironment:
             lookback_window: Number of past observations to include in state
             reward_scaling: Scaling factor for rewards
         """
-        # Initialize gym environment if available
-        if GYM_AVAILABLE and hasattr(gym, 'Env'):
-            try:
-                super(TradingEnvironment, self).__init__()
-            except:
-                pass  # Ignore if gym.Env is not properly available
+        # Initialize gym environment
+        if GYM_AVAILABLE:
+            super(TradingEnvironment, self).__init__()
         
         self.data = data.copy()
         self.initial_balance = initial_balance
@@ -142,13 +142,20 @@ class TradingEnvironment:
         else:
             logger.info("Gym not available - running in compatibility mode")
     
-    def reset(self) -> np.ndarray:
+    def reset(self, seed=None, options=None) -> Tuple[np.ndarray, Dict]:
         """
         Reset the environment to initial state.
         
+        Args:
+            seed: Random seed (for gymnasium compatibility)
+            options: Additional options (for gymnasium compatibility)
+        
         Returns:
-            Initial observation
+            Tuple of (initial observation, info dict)
         """
+        if seed is not None:
+            np.random.seed(seed)
+            
         self.current_step = self.lookback_window
         self.balance = self.initial_balance
         self.position = 0.0
@@ -160,9 +167,16 @@ class TradingEnvironment:
         self.trades_history = []
         self.rewards_history = []
         
-        return self._get_observation()
+        observation = self._get_observation()
+        info = {
+            'balance': self.balance,
+            'position': self.position,
+            'current_step': self.current_step
+        }
+        
+        return observation, info
     
-    def step(self, action: np.ndarray) -> Tuple[np.ndarray, float, bool, Dict]:
+    def step(self, action: np.ndarray) -> Tuple[np.ndarray, float, bool, bool, Dict]:
         """
         Execute one step in the environment.
         
@@ -170,10 +184,10 @@ class TradingEnvironment:
             action: Action to take [position_change]
             
         Returns:
-            Tuple of (observation, reward, done, info)
+            Tuple of (observation, reward, terminated, truncated, info)
         """
         if self.current_step >= len(self.data) - 1:
-            return self._get_observation(), 0.0, True, {}
+            return self._get_observation(), 0.0, True, False, {}
         
         # Extract action
         position_change = np.clip(action[0], -1.0, 1.0)
@@ -202,10 +216,8 @@ class TradingEnvironment:
         observation = self._get_observation()
         
         # Check if episode is done
-        done = (
-            self.current_step >= len(self.data) - 1 or
-            portfolio_value <= self.initial_balance * 0.1  # Stop if 90% loss
-        )
+        terminated = self.current_step >= len(self.data) - 1
+        truncated = portfolio_value <= self.initial_balance * 0.1  # Stop if 90% loss
         
         # Additional info
         info = {
@@ -219,7 +231,7 @@ class TradingEnvironment:
         
         self.rewards_history.append(reward)
         
-        return observation, reward * self.reward_scaling, done, info
+        return observation, reward * self.reward_scaling, terminated, truncated, info
     
     def _execute_trade(self, new_position: float) -> float:
         """

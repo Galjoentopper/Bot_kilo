@@ -398,7 +398,11 @@ class PPOTrainer:
         portfolio_stats = []
         
         for episode in range(n_episodes):
-            obs = eval_env.reset()
+            reset_result = eval_env.reset()
+            if isinstance(reset_result, tuple):
+                obs, _ = reset_result  # Handle gymnasium-style reset
+            else:
+                obs = reset_result  # Handle old gym-style reset
             episode_reward = 0
             episode_length = 0
             done = False
@@ -411,7 +415,22 @@ class PPOTrainer:
                         action = np.array([action])
                 else:
                     action = np.array([0])  # Default action as numpy array
-                obs, reward, done, info = eval_env.step(action)
+                
+                step_result = eval_env.step(action)
+                # Handle both gymnasium (5 values) and gym (4 values) formats
+                obs = step_result[0]
+                reward = step_result[1]
+                if len(step_result) == 5:
+                    # Gymnasium format: obs, reward, terminated, truncated, info
+                    terminated = step_result[2]
+                    truncated = step_result[3]
+                    info = step_result[4]
+                    done = terminated or truncated
+                else:
+                    # Old gym format: obs, reward, done, info
+                    done = step_result[2]
+                    info = step_result[3]
+                    
                 episode_reward += reward
                 episode_length += 1
             

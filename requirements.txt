@@ -116,3 +116,5 @@ tenacity>=8.2.0
 
 # Enhanced pandas functionality
 pandas-ta>=0.3.14b0
+
+stable-baselines3 
