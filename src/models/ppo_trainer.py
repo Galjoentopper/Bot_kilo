@@ -348,7 +348,7 @@ class PPOTrainer:
                 self.model.learn(
                     total_timesteps=total_timesteps,
                     callback=callbacks if SB3_AVAILABLE else None,
-                    progress_bar=True if SB3_AVAILABLE else False
+                    progress_bar=False  # Disable progress bar to avoid tqdm/rich dependency issues
                 )
             
             # Save model (if MLflow available)
