@@ -8,7 +8,7 @@ Optimized for GPU training with Paperspace Gradient.
 
 import pandas as pd
 import numpy as np
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 import logging
 from scipy import stats
 import warnings
@@ -257,29 +257,32 @@ class FeatureEngine:
     
     def _add_time_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """Add time-based features."""
+        if df.empty:
+            logger.warning("Empty DataFrame provided for time features")
+            return df
         include_hour = self.config.get('include_hour', True)
         include_day_of_week = self.config.get('include_day_of_week', True)
         include_month = self.config.get('include_month', True)
         
-        if include_hour and hasattr(df.index, 'hour'):
+        # Check if index is a DatetimeIndex before accessing datetime attributes
+        if include_hour and isinstance(df.index, pd.DatetimeIndex):
             df['hour'] = df.index.hour
             df['hour_sin'] = np.sin(2 * np.pi * df['hour'] / 24)
             df['hour_cos'] = np.cos(2 * np.pi * df['hour'] / 24)
         
-        if include_day_of_week and hasattr(df.index, 'dayofweek'):
+        if include_day_of_week and isinstance(df.index, pd.DatetimeIndex):
             df['day_of_week'] = df.index.dayofweek
             df['dow_sin'] = np.sin(2 * np.pi * df['day_of_week'] / 7)
             df['dow_cos'] = np.cos(2 * np.pi * df['day_of_week'] / 7)
         
-        if include_month and hasattr(df.index, 'month'):
+        if include_month and isinstance(df.index, pd.DatetimeIndex):
             df['month'] = df.index.month
             df['month_sin'] = np.sin(2 * np.pi * df['month'] / 12)
             df['month_cos'] = np.cos(2 * np.pi * df['month'] / 12)
         
         # Market session features
-        if hasattr(df.index, 'dayofweek'):
+        if isinstance(df.index, pd.DatetimeIndex):
             df['is_weekend'] = (df.index.dayofweek >= 5).astype(int)
-        if hasattr(df.index, 'hour'):
             df['is_night'] = ((df.index.hour >= 22) | (df.index.hour <= 6)).astype(int)
         
         return df
@@ -324,6 +327,8 @@ class FeatureEngine:
     def _calculate_rsi(self, prices: pd.Series, period: int = 14) -> pd.Series:
         """Calculate RSI."""
         delta = prices.diff()
+        # Ensure delta is numeric before comparison
+        delta = pd.to_numeric(delta, errors='coerce')
         gain = delta.where(delta > 0, 0.0).rolling(window=period).mean()
         loss = (-delta.where(delta < 0, 0.0)).rolling(window=period).mean()
         rs = gain / loss
