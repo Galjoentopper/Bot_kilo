@@ -9,6 +9,10 @@ Optimized for GPU training on Paperspace Gradient.
 import sys
 import os
 import argparse
+
+# Add project root to Python path
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, project_root)
 import yaml
 from datetime import datetime
 from pathlib import Path
