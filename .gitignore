@@ -163,7 +163,7 @@ tmp/
 *.egg-info/
 
 # Model files and training artifacts
-models/
+/models/
 *.pkl
 *.joblib
 *.h5
