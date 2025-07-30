@@ -8,70 +8,16 @@ Simulates realistic trading conditions with transaction costs and slippage.
 
 import numpy as np
 import pandas as pd
-from typing import Dict, List, Optional, Tuple, Any, TYPE_CHECKING
+from typing import Dict, List, Optional, Tuple, Any
 import logging
 
-# Type checking imports
-if TYPE_CHECKING:
-    try:
-        import gymnasium as gym
-        BaseEnvType = gym.Env
-    except ImportError:
-        try:
-            import gym  # type: ignore
-            BaseEnvType = gym.Env  # type: ignore
-        except ImportError:
-            BaseEnvType = object
-else:
-    BaseEnvType = object
-
-# Runtime imports with fallback
-try:
-    import gymnasium as gym
-    from gymnasium import spaces
-    GYM_AVAILABLE = True
-    BaseEnv = gym.Env
-except ImportError:
-    try:
-        import gym  # type: ignore
-        from gym import spaces  # type: ignore
-        GYM_AVAILABLE = True
-        BaseEnv = gym.Env  # type: ignore
-    except ImportError:
-        # Create dummy classes for type hints when gym is not available
-        class _DummyBox:
-            def __init__(self, low, high, shape, dtype):
-                self.low = low
-                self.high = high
-                self.shape = shape
-                self.dtype = dtype
-        
-        class _DummySpaces:
-            Box = _DummyBox
-        
-        class _DummyEnv:
-            def __init__(self):
-                pass
-            def reset(self):
-                return None
-            def step(self, action):
-                return None, 0, False, {}
-            def render(self, mode='human'):
-                pass
-            def close(self):
-                pass
-        
-        class _DummyGym:
-            Env = _DummyEnv
-        
-        spaces = _DummySpaces()  # type: ignore
-        gym = _DummyGym()  # type: ignore
-        BaseEnv = _DummyEnv
-        GYM_AVAILABLE = False
+# Simplified imports - prioritize gymnasium
+import gymnasium as gym
+from gymnasium import spaces
 
 logger = logging.getLogger(__name__)
 
-class TradingEnvironment(BaseEnvType):  # type: ignore
+class TradingEnvironment(gym.Env):
     """
     Gym-compatible trading environment for crypto trading.
     """
@@ -99,8 +45,7 @@ class TradingEnvironment(BaseEnvType):  # type: ignore
             reward_scaling: Scaling factor for rewards
         """
         # Initialize gym environment
-        if GYM_AVAILABLE:
-            super().__init__()
+        super().__init__()
         
         self.data = data.copy()
         self.initial_balance = initial_balance
@@ -124,49 +69,40 @@ class TradingEnvironment(BaseEnvType):  # type: ignore
         
         # Action space: [position_change] where position_change is in [-1, 1]
         # -1 = sell all, 0 = hold, 1 = buy max
-        if GYM_AVAILABLE:
-            self.action_space = spaces.Box(
-                low=-1.0,
-                high=1.0,
-                shape=(1,),
-                dtype=np.float32
-            )
-            
-            # Observation space: [market_features, portfolio_state]
-            n_features = len(self.data.columns) - 1  # Exclude 'close' price
-            portfolio_features = 3  # balance, position, unrealized_pnl
-            
-            # Use reasonable bounds instead of infinity to prevent NaN issues
-            self.observation_space = spaces.Box(
-                low=-100.0,
-                high=100.0,
-                shape=(self.lookback_window, n_features + portfolio_features),
-                dtype=np.float32
-            )
-        else:
-            # Dummy spaces when gym is not available
-            self.action_space = None
-            self.observation_space = None
+        self.action_space = spaces.Box(
+            low=-1.0,
+            high=1.0,
+            shape=(1,),
+            dtype=np.float32
+        )
+        
+        # Observation space: [market_features, portfolio_state]
+        n_features = len(self.data.columns) - 1  # Exclude 'close' price
+        portfolio_features = 3  # balance, position, unrealized_pnl
+        
+        # Use reasonable bounds instead of infinity to prevent NaN issues
+        self.observation_space = spaces.Box(
+            low=-100.0,
+            high=100.0,
+            shape=(self.lookback_window, n_features + portfolio_features),
+            dtype=np.float32
+        )
         
         # Feature columns (exclude 'close' for features, but keep for price calculation)
         self.feature_columns = [col for col in self.data.columns if col != 'close']
         
         logger.info(f"Trading environment initialized with {len(self.data)} steps")
-        if GYM_AVAILABLE and self.action_space is not None:
-            logger.info(f"Action space: {self.action_space}")
-            if self.observation_space is not None and hasattr(self.observation_space, 'shape'):
-                logger.info(f"Observation space: {self.observation_space.shape}")
-        else:
-            logger.info("Gym not available - running in compatibility mode")
+        logger.info(f"Action space: {self.action_space}")
+        logger.info(f"Observation space: {self.observation_space.shape}")
     
-    def reset(self, seed=None, options=None) -> Tuple[np.ndarray, Dict]:
+    def reset(self, *, seed=None, options=None) -> Tuple[np.ndarray, Dict]:
         """
         Reset the environment to initial state.
         
         Args:
             seed: Random seed (for gymnasium compatibility)
             options: Additional options (for gymnasium compatibility)
-        
+            
         Returns:
             Tuple of (initial observation, info dict)
         """
@@ -468,116 +404,3 @@ class TradingEnvironment(BaseEnvType):  # type: ignore
         peak = np.maximum.accumulate(portfolio_values)
         drawdown = (portfolio_values - peak) / peak
         return float(abs(np.min(drawdown)))
-    
-    def render(self, mode: str = 'human'):
-        """
-        Render the environment (optional).
-        
-        Args:
-            mode: Rendering mode
-        """
-        if mode == 'human':
-            current_price = self.data.iloc[self.current_step]['close']
-            portfolio_value = self._calculate_portfolio_value(current_price)
-            
-            print(f"Step: {self.current_step}")
-            print(f"Price: {current_price:.4f}")
-            print(f"Position: {self.position:.4f}")
-            print(f"Balance: {self.balance:.2f}")
-            print(f"Portfolio Value: {portfolio_value:.2f}")
-            print(f"Total Trades: {self.total_trades}")
-            print("-" * 40)
-    
-    def close(self):
-        """Close the environment."""
-        pass
-
-class MultiAssetTradingEnvironment(TradingEnvironment):
-    """
-    Extended trading environment for multiple assets.
-    """
-    
-    def __init__(
-        self,
-        data_dict: Dict[str, pd.DataFrame],
-        **kwargs
-    ):
-        """
-        Initialize multi-asset trading environment.
-        
-        Args:
-            data_dict: Dictionary mapping asset names to DataFrames
-            **kwargs: Additional arguments for base class
-        """
-        self.assets = list(data_dict.keys())
-        self.data_dict = data_dict
-        
-        # Combine all asset data (simplified approach)
-        # In practice, you might want more sophisticated handling
-        combined_data = pd.concat([
-            df.add_suffix(f'_{asset}') for asset, df in data_dict.items()
-        ], axis=1)
-        
-        super().__init__(combined_data, **kwargs)
-        
-        # Override action space for multiple assets
-        # Action: [position_change_asset1, position_change_asset2, ...]
-        if GYM_AVAILABLE:
-            self.action_space = spaces.Box(
-                low=-1.0,
-                high=1.0,
-                shape=(len(self.assets),),
-                dtype=np.float32
-            )
-        else:
-            self.action_space = None
-        
-        # Track positions for each asset
-        self.positions = {asset: 0.0 for asset in self.assets}
-        
-        logger.info(f"Multi-asset trading environment initialized with {len(self.assets)} assets")
-    
-    def _execute_trade_multi(self, action: np.ndarray) -> float:
-        """
-        Execute trades for multiple assets.
-        
-        Args:
-            action: Array of position changes for each asset
-            
-        Returns:
-            Total reward from all trades
-        """
-        total_reward = 0.0
-        
-        for i, asset in enumerate(self.assets):
-            position_change = np.clip(action[i], -1.0, 1.0)
-            new_position = np.clip(
-                self.positions[asset] + position_change,
-                -self.max_position_size,
-                self.max_position_size
-            )
-            
-            if abs(new_position - self.positions[asset]) > 1e-6:
-                # Execute trade for this asset
-                current_price = self.data_dict[asset].iloc[self.current_step]['close']
-                trade_size = abs(position_change) * self.balance / len(self.assets)
-                
-                # Apply costs
-                fee = trade_size * self.transaction_fee
-                slippage_cost = trade_size * self.slippage
-                total_cost = fee + slippage_cost
-                
-                self.balance -= total_cost
-                self.total_fees_paid += total_cost
-                self.total_trades += 1
-                
-                # Calculate reward
-                if self.current_step < len(self.data_dict[asset]) - 1:
-                    next_price = self.data_dict[asset].iloc[self.current_step + 1]['close']
-                    price_change = (next_price - current_price) / current_price
-                    position_reward = new_position * price_change * trade_size
-                    total_reward += position_reward - total_cost
-                
-                self.positions[asset] = new_position
-        
-        return total_reward
