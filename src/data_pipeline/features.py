@@ -122,8 +122,13 @@ class FeatureEngine:
         df['upper_shadow_pct'] = df['upper_shadow'] / df['close']
         df['lower_shadow_pct'] = df['lower_shadow'] / df['close']
         
-        # Returns for different periods
-        for period in self.config['returns_periods']:
+        # Returns for different periods - with error handling
+        returns_periods = self.config.get('returns_periods', [1, 5, 15])
+        if not returns_periods:
+            logger.warning("No returns_periods configured, using default [1, 5, 15]")
+            returns_periods = [1, 5, 15]
+            
+        for period in returns_periods:
             df[f'return_{period}'] = df['close'].pct_change(period)
             df[f'log_return_{period}'] = np.log(df['close'] / df['close'].shift(period))
             df[f'high_return_{period}'] = df['high'].pct_change(period)
@@ -133,35 +138,38 @@ class FeatureEngine:
     
     def _add_technical_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """Add technical indicators."""
-        # Simple Moving Averages
-        for period in self.config['sma_periods']:
+        # Simple Moving Averages - with error handling
+        sma_periods = self.config.get('sma_periods', [5, 10, 20, 50])
+        for period in sma_periods:
             df[f'sma_{period}'] = df['close'].rolling(window=period).mean()
             df[f'sma_{period}_ratio'] = df['close'] / df[f'sma_{period}']
         
-        # Exponential Moving Averages
-        for period in self.config['ema_periods']:
+        # Exponential Moving Averages - with error handling
+        ema_periods = self.config.get('ema_periods', [5, 10, 20, 50])
+        for period in ema_periods:
             df[f'ema_{period}'] = df['close'].ewm(span=period).mean()
             df[f'ema_{period}_ratio'] = df['close'] / df[f'ema_{period}']
         
-        # RSI
-        df['rsi'] = self._calculate_rsi(df['close'], self.config['rsi_period'])
+        # RSI - with error handling
+        rsi_period = self.config.get('rsi_period', 14)
+        df['rsi'] = self._calculate_rsi(df['close'], rsi_period)
         
-        # MACD
-        macd_line, macd_signal, macd_histogram = self._calculate_macd(
-            df['close'], 
-            self.config['macd_fast'], 
-            self.config['macd_slow'], 
-            self.config['macd_signal']
+        # MACD - with error handling
+        macd_fast = self.config.get('macd_fast', 12)
+        macd_slow = self.config.get('macd_slow', 26)
+        macd_signal = self.config.get('macd_signal', 9)
+        macd_line, macd_signal_line, macd_histogram = self._calculate_macd(
+            df['close'], macd_fast, macd_slow, macd_signal
         )
         df['macd'] = macd_line
-        df['macd_signal'] = macd_signal
+        df['macd_signal'] = macd_signal_line
         df['macd_histogram'] = macd_histogram
         
-        # Bollinger Bands
+        # Bollinger Bands - with error handling
+        bollinger_period = self.config.get('bollinger_period', 20)
+        bollinger_std = self.config.get('bollinger_std', 2)
         bb_upper, bb_middle, bb_lower = self._calculate_bollinger_bands(
-            df['close'], 
-            self.config['bollinger_period'], 
-            self.config['bollinger_std']
+            df['close'], bollinger_period, bollinger_std
         )
         df['bb_upper'] = bb_upper
         df['bb_middle'] = bb_middle
@@ -169,21 +177,23 @@ class FeatureEngine:
         df['bb_width'] = (bb_upper - bb_lower) / bb_middle
         df['bb_position'] = (df['close'] - bb_lower) / (bb_upper - bb_lower)
         
-        # ATR (Average True Range)
-        df['atr'] = self._calculate_atr(df, self.config['atr_period'])
+        # ATR (Average True Range) - with error handling
+        atr_period = self.config.get('atr_period', 14)
+        df['atr'] = self._calculate_atr(df, atr_period)
         df['atr_pct'] = df['atr'] / df['close']
         
-        # Stochastic Oscillator
+        # Stochastic Oscillator - with error handling
+        stoch_k_period = self.config.get('stoch_k_period', 14)
+        stoch_d_period = self.config.get('stoch_d_period', 3)
         stoch_k, stoch_d = self._calculate_stochastic(
-            df, 
-            self.config['stoch_k_period'], 
-            self.config['stoch_d_period']
+            df, stoch_k_period, stoch_d_period
         )
         df['stoch_k'] = stoch_k
         df['stoch_d'] = stoch_d
         
-        # CCI (Commodity Channel Index)
-        df['cci'] = self._calculate_cci(df, self.config['cci_period'])
+        # CCI (Commodity Channel Index) - with error handling
+        cci_period = self.config.get('cci_period', 20)
+        df['cci'] = self._calculate_cci(df, cci_period)
         
         return df
     
@@ -209,7 +219,8 @@ class FeatureEngine:
     
     def _add_volatility_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """Add volatility-based features."""
-        for period in self.config['volatility_periods']:
+        volatility_periods = self.config.get('volatility_periods', [10, 20, 50])
+        for period in volatility_periods:
             # Rolling standard deviation
             df[f'volatility_{period}'] = df['return_1'].rolling(window=period).std()
             
@@ -246,17 +257,21 @@ class FeatureEngine:
     
     def _add_time_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """Add time-based features."""
-        if self.config['include_hour'] and hasattr(df.index, 'hour'):
+        include_hour = self.config.get('include_hour', True)
+        include_day_of_week = self.config.get('include_day_of_week', True)
+        include_month = self.config.get('include_month', True)
+        
+        if include_hour and hasattr(df.index, 'hour'):
             df['hour'] = df.index.hour
             df['hour_sin'] = np.sin(2 * np.pi * df['hour'] / 24)
             df['hour_cos'] = np.cos(2 * np.pi * df['hour'] / 24)
         
-        if self.config['include_day_of_week'] and hasattr(df.index, 'dayofweek'):
+        if include_day_of_week and hasattr(df.index, 'dayofweek'):
             df['day_of_week'] = df.index.dayofweek
             df['dow_sin'] = np.sin(2 * np.pi * df['day_of_week'] / 7)
             df['dow_cos'] = np.cos(2 * np.pi * df['day_of_week'] / 7)
         
-        if self.config['include_month'] and hasattr(df.index, 'month'):
+        if include_month and hasattr(df.index, 'month'):
             df['month'] = df.index.month
             df['month_sin'] = np.sin(2 * np.pi * df['month'] / 12)
             df['month_cos'] = np.cos(2 * np.pi * df['month'] / 12)

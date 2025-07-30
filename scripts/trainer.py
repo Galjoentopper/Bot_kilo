@@ -22,6 +22,7 @@ import numpy as np
 
 # Import from installed package
 from src.utils.logger import setup_logging, TradingBotLogger
+from src.utils.config import prepare_feature_config
 from src.data_pipeline.loader import DataLoader
 from src.data_pipeline.features import FeatureEngine
 from src.data_pipeline.preprocess import DataPreprocessor
@@ -110,7 +111,8 @@ def main() -> None:
         
         # Feature engineering
         logger.info("Generating features...")
-        feature_engine = FeatureEngine(config.get('features', {}))
+        feature_config = prepare_feature_config(config)
+        feature_engine = FeatureEngine(feature_config)
         
         processed_data = {}
         for symbol, df in data_dict.items():
