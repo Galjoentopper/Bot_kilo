@@ -151,3 +151,39 @@ Thumbs.db
 logs/
 temp/
 tmp/
+
+# Additional Python cache files
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+
+# Model files and training artifacts
+models/
+*.pkl
+*.joblib
+*.h5
+*.hdf5
+*.ckpt
+*.pt
+*.pth
+
+# Data files
+data/*.csv
+data/*.json
+data/*.parquet
+*.csv
+*.json
+*.parquet
+
+# MLflow artifacts
+mlruns/
+mlartifacts/
+
+# Jupyter notebook checkpoints
+.ipynb_checkpoints/
+**/.ipynb_checkpoints/
