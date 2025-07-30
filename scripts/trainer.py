@@ -26,9 +26,6 @@ from src.utils.config import prepare_feature_config
 from src.data_pipeline.loader import DataLoader
 from src.data_pipeline.features import FeatureEngine
 from src.data_pipeline.preprocess import DataPreprocessor
-from src.models.gru_trainer import GRUTrainer
-from src.models.lgbm_trainer import LightGBMTrainer
-from src.models.ppo_trainer import PPOTrainer
 from src.rl_env.trading_env import TradingEnvironment
 from src.notifier.telegram import TelegramNotifier
 
@@ -191,6 +188,13 @@ def train_gru_model(
     logger.info("Training GRU model...")
     
     try:
+        # Import GRU trainer (lazy import)
+        try:
+            from src.models.gru_trainer import GRUTrainer
+        except ImportError as e:
+            logger.error("Failed to import GRUTrainer. Please install required dependencies.")
+            raise ImportError("GRU model dependencies not installed. Run 'pip install -e .' to install all dependencies.") from e
+        
         # Prepare sequences for GRU
         sequence_length = config.get('models', {}).get('gru', {}).get('sequence_length', 20)
         
@@ -256,6 +260,13 @@ def train_lightgbm_model(
     logger.info("Training LightGBM model...")
     
     try:
+        # Import LightGBM trainer (lazy import)
+        try:
+            from src.models.lgbm_trainer import LightGBMTrainer
+        except ImportError as e:
+            logger.error("Failed to import LightGBMTrainer. Please install required dependencies.")
+            raise ImportError("LightGBM model dependencies not installed. Run 'pip install -e .' to install all dependencies.") from e
+        
         # Initialize and train LightGBM
         lgbm_trainer = LightGBMTrainer(config, task_type="regression")
         
@@ -309,6 +320,13 @@ def train_ppo_model(
     logger.info("Training PPO model...")
     
     try:
+        # Import PPO trainer (lazy import)
+        try:
+            from src.models.ppo_trainer import PPOTrainer
+        except ImportError as e:
+            logger.error("Failed to import PPOTrainer. Please install required dependencies.")
+            raise ImportError("PPO model dependencies not installed. Run 'pip install -e .' to install all dependencies.") from e
+        
         # Use the first symbol's data for RL training
         main_symbol = list(processed_data.keys())[0]
         main_data = processed_data[main_symbol]
