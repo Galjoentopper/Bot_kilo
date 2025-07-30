@@ -93,13 +93,34 @@ class FeatureEngine:
         # Custom features
         features_df = self._add_custom_features(features_df)
         
-        # Remove any infinite or NaN values
+        # Remove any infinite or NaN values with more robust handling
         features_df = features_df.replace([np.inf, -np.inf], np.nan)
+        
+        # Count NaN values before cleaning
+        nan_count_before = features_df.isnull().sum().sum()
+        if nan_count_before > 0:
+            logger.warning(f"Found {nan_count_before} NaN values in generated features")
+        
+        # Forward fill, then backward fill, then fill remaining with 0
+        features_df = features_df.ffill().bfill().fillna(0)
+        
+        # Final validation - ensure no NaN or inf values remain
+        nan_count_after = features_df.isnull().sum().sum()
+        inf_count = np.isinf(features_df.select_dtypes(include=[np.number])).sum().sum()
+        
+        if nan_count_after > 0:
+            logger.error(f"Still have {nan_count_after} NaN values after cleaning")
+            features_df = features_df.fillna(0)  # Force fill any remaining NaN
+        
+        if inf_count > 0:
+            logger.error(f"Still have {inf_count} infinite values after cleaning")
+            features_df = features_df.replace([np.inf, -np.inf], [1e6, -1e6])  # Replace with large but finite values
         
         # Log feature generation summary
         original_cols = len(df.columns)
         new_cols = len(features_df.columns)
         logger.info(f"Generated {new_cols - original_cols} new features")
+        logger.info(f"Final data validation: NaN={features_df.isnull().sum().sum()}, Inf={np.isinf(features_df.select_dtypes(include=[np.number])).sum().sum()}")
         
         return features_df
     
@@ -325,14 +346,21 @@ class FeatureEngine:
     
     # Technical indicator calculation methods
     def _calculate_rsi(self, prices: pd.Series, period: int = 14) -> pd.Series:
-        """Calculate RSI."""
+        """Calculate RSI with improved error handling."""
         delta = prices.diff()
         # Ensure delta is numeric before comparison
         delta = pd.to_numeric(delta, errors='coerce')
         gain = delta.where(delta > 0, 0.0).rolling(window=period).mean()
         loss = (-delta.where(delta < 0, 0.0)).rolling(window=period).mean()
-        rs = gain / loss
-        return 100 - (100 / (1 + rs))
+        
+        # Avoid division by zero
+        rs = gain / (loss + 1e-10)  # Add small epsilon to prevent division by zero
+        rsi = 100 - (100 / (1 + rs))
+        
+        # Ensure RSI is within valid range [0, 100]
+        rsi = pd.Series(np.clip(rsi, 0, 100), index=rsi.index)
+        
+        return rsi
     
     def _calculate_macd(self, prices: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9) -> Tuple[pd.Series, pd.Series, pd.Series]:
         """Calculate MACD."""
@@ -368,11 +396,18 @@ class FeatureEngine:
         return k_percent, d_percent
     
     def _calculate_cci(self, df: pd.DataFrame, period: int = 20) -> pd.Series:
-        """Calculate Commodity Channel Index."""
+        """Calculate Commodity Channel Index with improved error handling."""
         typical_price = (df['high'] + df['low'] + df['close']) / 3
         sma = typical_price.rolling(window=period).mean()
         mean_deviation = typical_price.rolling(window=period).apply(lambda x: np.abs(x - x.mean()).mean())
-        return (typical_price - sma) / (0.015 * mean_deviation)
+        
+        # Avoid division by zero
+        cci = (typical_price - sma) / (0.015 * mean_deviation + 1e-10)
+        
+        # Clip extreme values to prevent numerical instability
+        cci = pd.Series(np.clip(cci, -500, 500), index=cci.index)
+        
+        return cci
     
     def _calculate_obv(self, df: pd.DataFrame) -> pd.Series:
         """Calculate On-Balance Volume."""
@@ -390,10 +425,18 @@ class FeatureEngine:
         return obv
     
     def _calculate_williams_r(self, df: pd.DataFrame, period: int = 14) -> pd.Series:
-        """Calculate Williams %R."""
+        """Calculate Williams %R with improved error handling."""
         highest_high = df['high'].rolling(window=period).max()
         lowest_low = df['low'].rolling(window=period).min()
-        return -100 * ((highest_high - df['close']) / (highest_high - lowest_low))
+        
+        # Avoid division by zero
+        denominator = highest_high - lowest_low
+        williams_r = -100 * ((highest_high - df['close']) / (denominator + 1e-10))
+        
+        # Ensure Williams %R is within valid range [-100, 0]
+        williams_r = pd.Series(np.clip(williams_r, -100, 0), index=williams_r.index)
+        
+        return williams_r
     
     def get_feature_names(self, df: pd.DataFrame) -> List[str]:
         """Get list of all feature column names."""

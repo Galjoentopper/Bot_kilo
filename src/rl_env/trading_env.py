@@ -6,6 +6,26 @@ Gym-compatible trading environment for reinforcement learning.
 Simulates realistic trading conditions with transaction costs and slippage.
 """
 
+import numpy as np
+import pandas as pd
+from typing import Dict, List, Optional, Tuple, Any, TYPE_CHECKING
+import logging
+
+# Type checking imports
+if TYPE_CHECKING:
+    try:
+        import gymnasium as gym
+        BaseEnvType = gym.Env
+    except ImportError:
+        try:
+            import gym  # type: ignore
+            BaseEnvType = gym.Env  # type: ignore
+        except ImportError:
+            BaseEnvType = object
+else:
+    BaseEnvType = object
+
+# Runtime imports with fallback
 try:
     import gymnasium as gym
     from gymnasium import spaces
@@ -48,14 +68,10 @@ except ImportError:
         gym = _DummyGym()  # type: ignore
         BaseEnv = _DummyEnv
         GYM_AVAILABLE = False
-import numpy as np
-import pandas as pd
-from typing import Dict, List, Optional, Tuple, Any
-import logging
 
 logger = logging.getLogger(__name__)
 
-class TradingEnvironment(BaseEnv):
+class TradingEnvironment(BaseEnvType):  # type: ignore
     """
     Gym-compatible trading environment for crypto trading.
     """
@@ -84,7 +100,7 @@ class TradingEnvironment(BaseEnv):
         """
         # Initialize gym environment
         if GYM_AVAILABLE:
-            super(TradingEnvironment, self).__init__()
+            super().__init__()
         
         self.data = data.copy()
         self.initial_balance = initial_balance
@@ -120,9 +136,10 @@ class TradingEnvironment(BaseEnv):
             n_features = len(self.data.columns) - 1  # Exclude 'close' price
             portfolio_features = 3  # balance, position, unrealized_pnl
             
+            # Use reasonable bounds instead of infinity to prevent NaN issues
             self.observation_space = spaces.Box(
-                low=-np.inf,
-                high=np.inf,
+                low=-100.0,
+                high=100.0,
                 shape=(self.lookback_window, n_features + portfolio_features),
                 dtype=np.float32
             )
@@ -294,7 +311,7 @@ class TradingEnvironment(BaseEnv):
     
     def _get_observation(self) -> np.ndarray:
         """
-        Get current observation.
+        Get current observation with proper data validation and normalization.
         
         Returns:
             Current state observation
@@ -310,21 +327,40 @@ class TradingEnvironment(BaseEnv):
             padding = np.zeros((self.lookback_window - len(market_data), len(self.feature_columns)))
             market_data = np.vstack([padding, market_data])
         
+        # Clean market data - replace NaN and inf values
+        market_data = np.nan_to_num(market_data, nan=0.0, posinf=1.0, neginf=-1.0)
+        
+        # Normalize market data to prevent extreme values
+        # Use robust scaling to handle outliers
+        market_data = np.clip(market_data, -10.0, 10.0)
+        
         # Portfolio state features
         current_price = self.data.iloc[self.current_step]['close']
         unrealized_pnl = self._calculate_unrealized_pnl(current_price)
         
+        # Ensure portfolio features are valid
+        balance_ratio = np.clip(self.balance / self.initial_balance, 0.01, 10.0)
+        position_ratio = np.clip(self.position, -1.0, 1.0)
+        pnl_ratio = np.clip(unrealized_pnl / self.initial_balance, -2.0, 2.0)
+        
         portfolio_features = np.array([
-            self.balance / self.initial_balance,  # Normalized balance
-            self.position,  # Current position
-            unrealized_pnl / self.initial_balance  # Normalized unrealized PnL
+            balance_ratio,  # Normalized balance (clipped)
+            position_ratio,  # Current position (clipped)
+            pnl_ratio  # Normalized unrealized PnL (clipped)
         ])
+        
+        # Ensure no NaN or inf values in portfolio features
+        portfolio_features = np.nan_to_num(portfolio_features, nan=0.0, posinf=1.0, neginf=-1.0)
         
         # Repeat portfolio features for each timestep in lookback window
         portfolio_matrix = np.tile(portfolio_features, (self.lookback_window, 1))
         
         # Combine market and portfolio features
         observation = np.hstack([market_data, portfolio_matrix])
+        
+        # Final validation - ensure all values are finite and within bounds
+        observation = np.nan_to_num(observation, nan=0.0, posinf=1.0, neginf=-1.0)
+        observation = np.clip(observation, -100.0, 100.0)
         
         return observation.astype(np.float32)
     
@@ -343,7 +379,7 @@ class TradingEnvironment(BaseEnv):
     
     def _calculate_unrealized_pnl(self, current_price: float) -> float:
         """
-        Calculate unrealized profit/loss.
+        Calculate unrealized profit/loss with proper validation.
         
         Args:
             current_price: Current asset price
@@ -351,7 +387,7 @@ class TradingEnvironment(BaseEnv):
         Returns:
             Unrealized PnL
         """
-        if self.position == 0:
+        if self.position == 0 or current_price <= 0:
             return 0.0
         
         # For simplicity, assume average entry price is tracked
@@ -361,12 +397,20 @@ class TradingEnvironment(BaseEnv):
         # Estimate PnL based on position and recent price movement
         if len(self.trades_history) > 0:
             last_trade_price = self.trades_history[-1]['price']
-            price_change = (current_price - last_trade_price) / last_trade_price
-            unrealized_pnl = self.position * price_change * position_value
+            if last_trade_price > 0:
+                price_change = (current_price - last_trade_price) / last_trade_price
+                # Clip price change to prevent extreme values
+                price_change = np.clip(price_change, -0.5, 0.5)
+                unrealized_pnl = self.position * price_change * position_value
+            else:
+                unrealized_pnl = 0.0
         else:
             unrealized_pnl = 0.0
         
-        return unrealized_pnl
+        # Ensure the result is finite
+        unrealized_pnl = np.nan_to_num(unrealized_pnl, nan=0.0, posinf=0.0, neginf=0.0)
+        
+        return float(unrealized_pnl)
     
     def get_portfolio_stats(self) -> Dict[str, float]:
         """

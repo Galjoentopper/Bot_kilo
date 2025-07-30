@@ -184,13 +184,13 @@ class PPOTrainer:
         logger.info(f"PPO Trainer initialized with device: {self.device}")
     
     def create_environment(
-        self, 
+        self,
         train_data: pd.DataFrame,
         eval_data: Optional[pd.DataFrame] = None,
         env_kwargs: Optional[Dict[str, Any]] = None
     ) -> Tuple[Any, Optional[Any]]:
         """
-        Create training and evaluation environments.
+        Create training and evaluation environments with data validation.
         
         Args:
             train_data: Training data
@@ -202,6 +202,11 @@ class PPOTrainer:
         """
         if env_kwargs is None:
             env_kwargs = {}
+        
+        # Validate training data
+        self._validate_data(train_data, "training")
+        if eval_data is not None:
+            self._validate_data(eval_data, "evaluation")
         
         # Default environment parameters
         default_kwargs = {
@@ -236,6 +241,42 @@ class PPOTrainer:
         
         return self.env, self.eval_env
     
+    def _validate_data(self, data: pd.DataFrame, data_type: str) -> None:
+        """
+        Validate data for NaN and infinite values.
+        
+        Args:
+            data: Data to validate
+            data_type: Type of data (for logging)
+        """
+        # Check for NaN values
+        nan_count = data.isnull().sum().sum()
+        if nan_count > 0:
+            logger.warning(f"{data_type} data contains {nan_count} NaN values")
+            # Fill NaN values with forward fill, then backward fill
+            data.ffill(inplace=True)
+            data.bfill(inplace=True)
+            # If still NaN, fill with 0
+            data.fillna(0, inplace=True)
+        
+        # Check for infinite values
+        inf_count = np.isinf(data.select_dtypes(include=[np.number])).sum().sum()
+        if inf_count > 0:
+            logger.warning(f"{data_type} data contains {inf_count} infinite values")
+            # Replace infinite values with large but finite numbers
+            data.replace([np.inf, -np.inf], [1e6, -1e6], inplace=True)
+        
+        # Ensure 'close' column exists and is valid
+        if 'close' not in data.columns:
+            raise ValueError(f"{data_type} data must contain 'close' column")
+        
+        if (data['close'] <= 0).any():
+            logger.warning(f"{data_type} data contains non-positive close prices")
+            # Replace non-positive prices with small positive value
+            data.loc[data['close'] <= 0, 'close'] = 0.0001
+        
+        logger.info(f"{data_type} data validated - Shape: {data.shape}")
+    
     def build_model(self, env: Any) -> Any:
         """
         Build PPO model.
@@ -246,13 +287,14 @@ class PPOTrainer:
         Returns:
             PPO model
         """
-        # Policy network configuration
+        # Policy network configuration with gradient clipping
         policy_kwargs = {
-            'net_arch': [dict(pi=[256, 256], vf=[256, 256])],
-            'activation_fn': nn.ReLU,
+            'net_arch': [dict(pi=[128, 128], vf=[128, 128])],  # Smaller network to reduce NaN risk
+            'activation_fn': nn.Tanh,  # Use Tanh instead of ReLU for better gradient stability
+            'ortho_init': False,  # Disable orthogonal initialization which can cause issues
         }
         
-        # Create PPO model
+        # Create PPO model with conservative parameters
         if SB3_AVAILABLE:
             self.model = SB3_PPO(
                 policy='MlpPolicy',
@@ -266,9 +308,11 @@ class PPOTrainer:
                 clip_range=self.clip_range,
                 ent_coef=self.ent_coef,
                 vf_coef=self.vf_coef,
+                max_grad_norm=0.5,  # Add gradient clipping
                 policy_kwargs=policy_kwargs,
                 device=self.device,
-                verbose=1
+                verbose=1,
+                seed=42  # Set seed for reproducibility
             )
         else:
             self.model = PPO()  # Use dummy class
