@@ -496,11 +496,8 @@ class GRUTrainer:
                     
                     # Log model with signature and input example
                     mlflow.pytorch.log_model(
-                        pytorch_model=self.model,
-                        artifact_path="model",
-                        conda_env=None,
-                        signature=None,  # Will be inferred from input_example if provided
-                        input_example=sample_input.cpu().detach().numpy()
+                        self.model,
+                        artifact_path="model"
                     )
         
         # Training results

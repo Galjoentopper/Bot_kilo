@@ -16,6 +16,7 @@ import joblib
 from datetime import datetime
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score, accuracy_score, classification_report
 from sklearn.model_selection import cross_val_score, TimeSeriesSplit
+from sklearn.base import BaseEstimator
 import matplotlib.pyplot as plt
 import seaborn as sns
 
@@ -257,15 +258,15 @@ class LightGBMTrainer:
                 if isinstance(X_train, pd.DataFrame):
                     sample_input = X_train.iloc[:1]
                 else:
-                    sample_input = X_train[:1]
+                    # For numpy arrays, get the first row
+                    sample_input = X_train[0:1]
                 
                 # Log model with signature and input example
-                mlflow.lightgbm.log_model(
-                    lgb_model=self.model,
-                    artifact_path="model",
-                    signature=None,  # Will be inferred from input_example if provided
-                    input_example=sample_input
-                )
+                if MLFLOW_AVAILABLE and mlflow is not None:
+                    mlflow.lightgbm.log_model(
+                        self.model,
+                        artifact_path="model"
+                    )
         
         # Training results
         results = {
@@ -320,7 +321,7 @@ class LightGBMTrainer:
         if self.model is not None:
             if self.task_type == "regression":
                 cv_scores = cross_val_score(
-                    self.model, X_array, y,
+                    self.model, X_array, y,  # type: ignore
                     cv=tscv,
                     scoring='neg_mean_squared_error',
                     n_jobs=-1
@@ -329,7 +330,7 @@ class LightGBMTrainer:
                 cv_scores = np.sqrt(cv_scores)  # Convert MSE to RMSE
             else:
                 cv_scores = cross_val_score(
-                    self.model, X_array, y,
+                    self.model, X_array, y,  # type: ignore
                     cv=tscv,
                     scoring='accuracy',
                     n_jobs=-1
@@ -375,7 +376,11 @@ class LightGBMTrainer:
         else:
             X_array = X
         
-        return self.model.predict(X_array)
+        predictions = self.model.predict(X_array)
+        # Ensure return type is numpy array
+        if not isinstance(predictions, np.ndarray):
+            predictions = np.array(predictions)
+        return predictions
     
     def predict_proba(self, X: Union[pd.DataFrame, np.ndarray]) -> np.ndarray:
         """
@@ -398,7 +403,16 @@ class LightGBMTrainer:
         else:
             X_array = X
         
-        return self.model.predict_proba(X_array)
+        # Check if we're using a classifier model that has predict_proba method
+        from lightgbm import LGBMClassifier
+        if isinstance(self.model, LGBMClassifier):
+            probabilities = self.model.predict_proba(X_array)
+            # Ensure return type is numpy array
+            if not isinstance(probabilities, np.ndarray):
+                probabilities = np.array(probabilities)
+            return probabilities
+        else:
+            raise ValueError("Model does not support predict_proba method")
     
     def _calculate_metrics(self, y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, float]:
         """
@@ -615,7 +629,7 @@ class LightGBMTrainer:
             if self.model is not None:
                 if self.task_type == "regression":
                     cv_scores = cross_val_score(
-                        self.model, X_array, y,
+                        self.model, X_array, y,  # type: ignore
                         cv=tscv,
                         scoring='neg_mean_squared_error',
                         n_jobs=-1
@@ -623,7 +637,7 @@ class LightGBMTrainer:
                     mean_score = -cv_scores.mean()  # Convert to positive
                 else:
                     cv_scores = cross_val_score(
-                        self.model, X_array, y,
+                        self.model, X_array, y,  # type: ignore
                         cv=tscv,
                         scoring='accuracy',
                         n_jobs=-1
