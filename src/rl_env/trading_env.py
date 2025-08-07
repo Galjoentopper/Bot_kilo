@@ -22,6 +22,29 @@ class TradingEnvironment(gym.Env):
     Gym-compatible trading environment for crypto trading.
     """
     
+    def _preprocess_data(self):
+        """
+        Preprocess and cache normalized market data to reduce computation per step.
+        """
+        # Feature columns (exclude 'close' for features, but keep for price calculation)
+        self.feature_columns = [col for col in self.data.columns if col != 'close']
+        
+        # Create normalized data cache
+        market_data = self.data[self.feature_columns].values
+        
+        # Clean market data - replace NaN and inf values
+        market_data = np.nan_to_num(market_data, nan=0.0, posinf=1.0, neginf=-1.0)
+        
+        # Normalize market data to prevent extreme values
+        # Use robust scaling to handle outliers
+        market_data = np.clip(market_data, -10.0, 10.0)
+        
+        # Cache the normalized data
+        self._normalized_data = market_data.astype(np.float32)
+    """
+    Gym-compatible trading environment for crypto trading.
+    """
+    
     def __init__(
         self,
         data: pd.DataFrame,
@@ -55,6 +78,9 @@ class TradingEnvironment(gym.Env):
         self.lookback_window = lookback_window
         self.reward_scaling = reward_scaling
         
+        # Preprocess and cache normalized data
+        self._preprocess_data()
+        
         # Environment state
         self.current_step = 0
         self.balance = initial_balance
@@ -67,6 +93,25 @@ class TradingEnvironment(gym.Env):
         self.trades_history = []
         self.rewards_history = []
         
+        # Pre-allocate arrays for observations to reduce memory allocation
+        n_features = len(self.feature_columns)
+        portfolio_features = 3  # balance, position, unrealized_pnl
+        
+        # Pre-allocate observation buffer
+        self._observation_buffer = np.zeros(
+            (self.lookback_window, n_features + portfolio_features),
+            dtype=np.float32
+        )
+        
+        # Pre-allocate market data buffer for lookback window
+        self._market_data_buffer = np.zeros(
+            (self.lookback_window, n_features),
+            dtype=np.float32
+        )
+        
+        # Pre-allocate portfolio features buffer
+        self._portfolio_features_buffer = np.zeros(portfolio_features, dtype=np.float32)
+        
         # Action space: [position_change] where position_change is in [-1, 1]
         # -1 = sell all, 0 = hold, 1 = buy max
         self.action_space = spaces.Box(
@@ -77,19 +122,12 @@ class TradingEnvironment(gym.Env):
         )
         
         # Observation space: [market_features, portfolio_state]
-        n_features = len(self.data.columns) - 1  # Exclude 'close' price
-        portfolio_features = 3  # balance, position, unrealized_pnl
-        
-        # Use reasonable bounds instead of infinity to prevent NaN issues
         self.observation_space = spaces.Box(
             low=-100.0,
             high=100.0,
             shape=(self.lookback_window, n_features + portfolio_features),
             dtype=np.float32
         )
-        
-        # Feature columns (exclude 'close' for features, but keep for price calculation)
-        self.feature_columns = [col for col in self.data.columns if col != 'close']
         
         logger.info(f"Trading environment initialized with {len(self.data)} steps")
         logger.info(f"Action space: {self.action_space}")
@@ -252,53 +290,37 @@ class TradingEnvironment(gym.Env):
         Returns:
             Current state observation
         """
-        # Get market features for lookback window
+        # Get market features for lookback window from preprocessed data
         start_idx = max(0, self.current_step - self.lookback_window)
         end_idx = self.current_step
         
-        market_data = self.data.iloc[start_idx:end_idx][self.feature_columns].values
+        # Extract market data from cached normalized data
+        market_data = self._normalized_data[start_idx:end_idx]
         
-        # Pad if necessary
-        if len(market_data) < self.lookback_window:
-            padding = np.zeros((self.lookback_window - len(market_data), len(self.feature_columns)))
-            market_data = np.vstack([padding, market_data])
-        
-        # Clean market data - replace NaN and inf values
-        market_data = np.nan_to_num(market_data, nan=0.0, posinf=1.0, neginf=-1.0)
-        
-        # Normalize market data to prevent extreme values
-        # Use robust scaling to handle outliers
-        market_data = np.clip(market_data, -10.0, 10.0)
+        # Copy to market data buffer
+        self._market_data_buffer.fill(0.0)  # Clear buffer
+        buffer_start = self.lookback_window - len(market_data)
+        self._market_data_buffer[buffer_start:self.lookback_window] = market_data
         
         # Portfolio state features
         current_price = self.data.iloc[self.current_step]['close']
         unrealized_pnl = self._calculate_unrealized_pnl(current_price)
         
-        # Ensure portfolio features are valid
-        balance_ratio = np.clip(self.balance / self.initial_balance, 0.01, 10.0)
-        position_ratio = np.clip(self.position, -1.0, 1.0)
-        pnl_ratio = np.clip(unrealized_pnl / self.initial_balance, -2.0, 2.0)
-        
-        portfolio_features = np.array([
-            balance_ratio,  # Normalized balance (clipped)
-            position_ratio,  # Current position (clipped)
-            pnl_ratio  # Normalized unrealized PnL (clipped)
-        ])
-        
-        # Ensure no NaN or inf values in portfolio features
-        portfolio_features = np.nan_to_num(portfolio_features, nan=0.0, posinf=1.0, neginf=-1.0)
+        # Ensure portfolio features are valid and store in buffer
+        self._portfolio_features_buffer[0] = np.clip(self.balance / self.initial_balance, 0.01, 10.0)  # balance_ratio
+        self._portfolio_features_buffer[1] = np.clip(self.position, -1.0, 1.0)  # position_ratio
+        self._portfolio_features_buffer[2] = np.clip(unrealized_pnl / self.initial_balance, -2.0, 2.0)  # pnl_ratio
         
         # Repeat portfolio features for each timestep in lookback window
-        portfolio_matrix = np.tile(portfolio_features, (self.lookback_window, 1))
+        # Using broadcasting to fill the observation buffer efficiently
+        portfolio_matrix = np.tile(self._portfolio_features_buffer, (self.lookback_window, 1))
         
-        # Combine market and portfolio features
-        observation = np.hstack([market_data, portfolio_matrix])
+        # Combine market and portfolio features in observation buffer
+        self._observation_buffer[:, :self._market_data_buffer.shape[1]] = self._market_data_buffer
+        self._observation_buffer[:, self._market_data_buffer.shape[1]:] = portfolio_matrix
         
-        # Final validation - ensure all values are finite and within bounds
-        observation = np.nan_to_num(observation, nan=0.0, posinf=1.0, neginf=-1.0)
-        observation = np.clip(observation, -100.0, 100.0)
-        
-        return observation.astype(np.float32)
+        # Return a copy of the observation buffer
+        return self._observation_buffer.copy()
     
     def _calculate_portfolio_value(self, current_price: float) -> float:
         """
@@ -332,6 +354,7 @@ class TradingEnvironment(gym.Env):
         
         # Estimate PnL based on position and recent price movement
         if len(self.trades_history) > 0:
+            # Vectorized access to last trade price
             last_trade_price = self.trades_history[-1]['price']
             if last_trade_price > 0:
                 price_change = (current_price - last_trade_price) / last_trade_price
@@ -375,8 +398,10 @@ class TradingEnvironment(gym.Env):
         
         # Win rate
         if len(self.trades_history) > 0:
-            profitable_trades = sum(1 for trade in self.trades_history if trade.get('pnl', 0) > 0)
-            win_rate = profitable_trades / len(self.trades_history)
+            # Vectorize the win rate calculation
+            pnl_values = np.array([trade.get('pnl', 0) for trade in self.trades_history])
+            profitable_trades = np.sum(pnl_values > 0)
+            win_rate = float(profitable_trades / len(self.trades_history))
         else:
             win_rate = 0.0
         

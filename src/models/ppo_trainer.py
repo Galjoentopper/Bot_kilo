@@ -66,6 +66,10 @@ except ImportError:
         def __init__(self, env_fns: List[Any]) -> None:
             self.env_fns = env_fns
     
+    class SB3_SubprocVecEnv:
+        def __init__(self, env_fns: List[Any]) -> None:
+            self.env_fns = env_fns
+    
     SB3_AVAILABLE = False
 
 # Create aliases for consistent usage
@@ -74,6 +78,8 @@ PPO = SB3_PPO
 EvalCallback = SB3_EvalCallback
 Monitor = SB3_Monitor
 DummyVecEnv = SB3_DummyVecEnv
+# SubprocVecEnv is already imported directly when SB3 is available
+# When SB3 is not available, we use our dummy implementation
 
 try:
     import mlflow  # type: ignore[import-untyped]
@@ -109,20 +115,31 @@ logger = logging.getLogger(__name__)
 class TradingCallback(BaseCallback):
     """
     Custom callback for monitoring trading performance during training.
+    Optimized to reduce synchronization overhead by limiting logging frequency.
     """
     
-    def __init__(self, eval_freq: int = 1000, verbose: int = 0):
+    def __init__(self, eval_freq: int = 1000, log_freq: int = 10000, verbose: int = 0):
         if SB3_AVAILABLE:
             super(TradingCallback, self).__init__(verbose)
         self.eval_freq = eval_freq
+        self.log_freq = log_freq  # Frequency of logging operations to reduce overhead
         self.episode_rewards = []
         self.episode_lengths = []
+        self.last_log_step = 0  # Track last step when logging occurred
         
     def _on_step(self) -> bool:
         if not SB3_AVAILABLE:
             return True
             
-        # Log episode rewards and lengths
+        # Only process logging at specified frequency to reduce synchronization overhead
+        current_step = getattr(self, 'num_timesteps', 0)
+        if current_step - self.last_log_step < self.log_freq:
+            return True  # Skip logging if not enough steps have passed
+            
+        # Update last log step
+        self.last_log_step = current_step
+            
+        # Log episode rewards and lengths (less frequently now)
         try:
             if hasattr(self, 'locals') and self.locals and len(self.locals.get('infos', [])) > 0:
                 for info in self.locals['infos']:
@@ -131,8 +148,8 @@ class TradingCallback(BaseCallback):
                         self.episode_lengths.append(info['episode']['l'])
                         
                         if MLFLOW_AVAILABLE and mlflow is not None:
-                            mlflow.log_metric("episode_reward", info['episode']['r'], step=getattr(self, 'num_timesteps', 0))
-                            mlflow.log_metric("episode_length", info['episode']['l'], step=getattr(self, 'num_timesteps', 0))
+                            mlflow.log_metric("episode_reward", info['episode']['r'], step=current_step)
+                            mlflow.log_metric("episode_length", info['episode']['l'], step=current_step)
         except Exception:
             pass  # Ignore logging errors
         
@@ -159,9 +176,9 @@ class PPOTrainer:
         
         # PPO parameters
         self.learning_rate = self.model_config.get('learning_rate', 0.0003)
-        self.n_steps = self.model_config.get('n_steps', 2048)
-        self.batch_size = self.model_config.get('batch_size', 64)
-        self.n_epochs = self.model_config.get('n_epochs', 10)
+        self.n_steps = self.model_config.get('n_steps', 4096)
+        self.batch_size = self.model_config.get('batch_size', 256)
+        self.n_epochs = self.model_config.get('n_epochs', 20)
         self.gamma = self.model_config.get('gamma', 0.99)
         self.gae_lambda = self.model_config.get('gae_lambda', 0.95)
         self.clip_range = self.model_config.get('clip_range', 0.2)
@@ -226,7 +243,21 @@ class PPOTrainer:
             return env
         
         # Use vectorized environment for better performance
-        self.env = DummyVecEnv([make_train_env])
+        # Create multiple environments for parallelization
+        n_envs = 8  # Number of parallel environments
+        
+        # For SubprocVecEnv, we need to create the environment creation function
+        # in a way that's picklable
+        def make_env_fn(data, kwargs):
+            def _init():
+                env = TradingEnvironment(data, **kwargs)
+                env = Monitor(env)
+                return env
+            return _init
+        
+        # Create environment functions that are picklable
+        env_fns = [make_env_fn(train_data, default_kwargs) for _ in range(n_envs)]
+        self.env = SubprocVecEnv(env_fns)
         
         # Create evaluation environment if eval data provided
         if eval_data is not None:
@@ -235,7 +266,10 @@ class PPOTrainer:
                 env = Monitor(env)
                 return env
             
+            # For evaluation, we typically use a single environment
             self.eval_env = DummyVecEnv([make_eval_env])
+        else:
+            self.eval_env = None
         
         logger.info("Training and evaluation environments created")
         
@@ -373,7 +407,7 @@ class PPOTrainer:
                 })
             
             # Setup callbacks
-            callbacks: List[Any] = [TradingCallback(eval_freq=1000)]
+            callbacks: List[Any] = [TradingCallback(eval_freq=1000, log_freq=10000)]
             
             if eval_env is not None and SB3_AVAILABLE:
                 eval_callback = SB3_EvalCallback(
@@ -616,7 +650,7 @@ class PPOTrainer:
             param_grid = {
                 'learning_rate': [1e-5, 1e-3],
                 'n_steps': [1024, 2048, 4096],
-                'batch_size': [32, 64, 128],
+                'batch_size': [32, 64, 128, 256],
                 'gamma': [0.95, 0.99, 0.999],
                 'clip_range': [0.1, 0.2, 0.3]
             }
