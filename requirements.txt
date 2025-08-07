@@ -93,7 +93,7 @@ ipykernel>=6.0.0
 
 # Environment specific
 # For Paperspace Gradient
-gradient>=2.0.0
+# gradient>=2.0.0
 
 # Docker support
 docker>=6.0.0
