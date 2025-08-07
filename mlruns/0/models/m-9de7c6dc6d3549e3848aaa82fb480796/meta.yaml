@@ -1,0 +1,10 @@
+artifact_location: file:///notebooks/Bot_kilo/mlruns/0/models/m-9de7c6dc6d3549e3848aaa82fb480796/artifacts
+creation_timestamp: 1754571598316
+experiment_id: '0'
+last_updated_timestamp: 1754571603736
+model_id: m-9de7c6dc6d3549e3848aaa82fb480796
+model_type: null
+name: model
+source_run_id: 689cc3df275e4ca7ab2481a865b3a263
+status: 2
+status_message: null
