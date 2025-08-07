@@ -446,7 +446,8 @@ verify_installation() {
     source venv/bin/activate
     
     # Test importing key modules
-    local modules=("pandas" "numpy" "lightgbm" "torch" "sklearn" "ccxt" "python-binance")
+    # Note: python-binance package is imported as "binance"
+    local modules=("pandas" "numpy" "lightgbm" "torch" "sklearn" "ccxt" "binance")
     
     for module in "${modules[@]}"; do
         if python -c "import $module; print('$module imported successfully')" &> /dev/null; then
