@@ -123,6 +123,15 @@ To update dependencies after the initial installation:
    pip install --upgrade -r requirements.txt
    ```
 
+## Stable-Baselines3 and Gymnasium Compatibility
+
+As of the latest update, we've upgraded to stable-baselines3 version 2.7.0 which fully supports gymnasium (the successor to the deprecated gym library). This upgrade resolves the Gym warnings that were previously appearing in the application.
+
+If you encounter any issues after updating, please ensure that:
+1. You're using gymnasium>=0.29.0 (already specified in requirements.txt)
+2. You've completely removed any references to the deprecated gym library
+3. You reinstall dependencies using the installation script if needed
+
 ## Contributing
 
 If you encounter issues with the installation process, please open an issue with:

@@ -421,8 +421,8 @@ install_python_dependencies() {
     
     # Reinforcement Learning dependencies
     show_progress "Installing reinforcement learning dependencies..."
-    python -m pip install --timeout 300 --retries 3 "stable-baselines3[extra]>=2.0.0" || \
-        python -m pip install --index-url https://pypi.org/simple/ --timeout 300 "stable-baselines3[extra]>=2.0.0"
+    python -m pip install --timeout 300 --retries 3 "stable-baselines3[extra]>=2.7.0" || \
+        python -m pip install --index-url https://pypi.org/simple/ --timeout 300 "stable-baselines3[extra]>=2.7.0"
     
     python -m pip install --timeout 300 --retries 3 gymnasium>=0.29.0 || \
         python -m pip install --index-url https://pypi.org/simple/ --timeout 300 gymnasium>=0.29.0

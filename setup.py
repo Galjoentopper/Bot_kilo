@@ -22,7 +22,7 @@ setup(
         "torch>=2.0.0",
         "torchvision>=0.15.0",
         "lightgbm>=4.0.0",
-        "stable-baselines3>=2.0.0",
+        "stable-baselines3>=2.7.0",
         "scikit-learn>=1.3.0",
         "scipy>=1.10.0",
         
