@@ -147,7 +147,7 @@ Thumbs.db
 *.db
 *.sqlite
 *.sqlite3
-logs/
+#logs/
 temp/
 tmp/
 
@@ -162,26 +162,26 @@ tmp/
 *.egg-info/
 
 # Model files and training artifacts
-/models/
-*.pkl
-*.joblib
-*.h5
-*.hdf5
-*.ckpt
-*.pt
-*.pth
+#/models/
+#*.pkl
+#*.joblib
+#*.h5
+#*.hdf5
+#*.ckpt
+#*.pt
+#*.pth
 
 # Data files
-data/*.csv
-data/*.json
-data/*.parquet
-*.csv
-*.json
-*.parquet
+#data/*.csv
+#data/*.json
+#data/*.parquet
+#*.csv
+#*.json
+#*.parquet
 
 # MLflow artifacts
-mlruns/
-mlartifacts/
+#mlruns/
+#mlartifacts/
 
 # Jupyter notebook checkpoints
 .ipynb_checkpoints/
