@@ -66,7 +66,7 @@ except ImportError:
         def __init__(self, env_fns: List[Any]) -> None:
             self.env_fns = env_fns
     
-    class SB3_SubprocVecEnv:
+    class SubprocVecEnv:
         def __init__(self, env_fns: List[Any]) -> None:
             self.env_fns = env_fns
     
@@ -237,7 +237,7 @@ class PPOTrainer:
             default_kwargs.update(env_kwargs)
         
         # Create training environment
-        def make_train_env():
+        def make_train_env(*args, **kwargs):
             env = TradingEnvironment(train_data, **default_kwargs)
             env = Monitor(env)
             return env
@@ -249,7 +249,7 @@ class PPOTrainer:
         # For SubprocVecEnv, we need to create the environment creation function
         # in a way that's picklable
         def make_env_fn(data, kwargs):
-            def _init():
+            def _init(*args, **env_kwargs):
                 env = TradingEnvironment(data, **kwargs)
                 env = Monitor(env)
                 return env
@@ -261,7 +261,7 @@ class PPOTrainer:
         
         # Create evaluation environment if eval data provided
         if eval_data is not None:
-            def make_eval_env():
+            def make_eval_env(*args, **kwargs):
                 env = TradingEnvironment(eval_data, **default_kwargs)
                 env = Monitor(env)
                 return env
@@ -494,11 +494,7 @@ class PPOTrainer:
         portfolio_stats = []
         
         for episode in range(n_episodes):
-            reset_result = eval_env.reset()
-            if isinstance(reset_result, tuple):
-                obs, _ = reset_result  # Handle gymnasium-style reset
-            else:
-                obs = reset_result  # Handle old gym-style reset
+            obs, _ = eval_env.reset()
             episode_reward = 0
             episode_length = 0
             done = False
@@ -512,20 +508,8 @@ class PPOTrainer:
                 else:
                     action = np.array([0])  # Default action as numpy array
                 
-                step_result = eval_env.step(action)
-                # Handle both gymnasium (5 values) and gym (4 values) formats
-                obs = step_result[0]
-                reward = step_result[1]
-                if len(step_result) == 5:
-                    # Gymnasium format: obs, reward, terminated, truncated, info
-                    terminated = step_result[2]
-                    truncated = step_result[3]
-                    info = step_result[4]
-                    done = terminated or truncated
-                else:
-                    # Old gym format: obs, reward, done, info
-                    done = step_result[2]
-                    info = step_result[3]
+                obs, reward, terminated, truncated, info = eval_env.step(action)
+                done = terminated or truncated
                     
                 episode_reward += reward
                 episode_length += 1

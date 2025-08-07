@@ -50,7 +50,6 @@ setup(
         
         # Reinforcement Learning Environment
         "gymnasium>=0.29.0",
-        "gym>=0.26.0",
         
         # Utilities
         "tqdm>=4.65.0",
@@ -81,7 +80,7 @@ setup(
             "ipykernel>=6.0.0",
         ],
         "gpu": [
-            "torch-audio>=2.0.0",
+            "torchaudio>=2.0.0",
         ],
     },
     classifiers=[

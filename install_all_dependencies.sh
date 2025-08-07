@@ -5,12 +5,26 @@
 
 set -e  # Exit immediately if a command exits with a non-zero status
 
+# Default values for command-line options
+SKIP_SYSTEM=false
+SKIP_PYTHON=false
+SKIP_VERIFICATION=false
+INSTALL_EXTRAS=false
+INSTALL_EDITABLE=false
+HELP=false
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
+CYAN='\033[0;36m'
 NC='\033[0m' # No Color
+
+# Progress bar variables
+TOTAL_STEPS=0
+CURRENT_STEP=0
 
 # Logging function
 log() {
@@ -26,11 +40,102 @@ log_warning() {
 }
 
 log_error() {
-    echo -e "${RED}$(date '+%Y-%m-%d %H:%M:%S') - $1${NC}"
+    echo -e "${RED}$(date '+%Y-%m-%d %H:%M:%S') - $1${NC}" >&2
 }
 
 log_info() {
     echo -e "${BLUE}$(date '+%Y-%m-%d %H:%M:%S') - $1${NC}"
+}
+
+log_debug() {
+    echo -e "${CYAN}$(date '+%Y-%m-%d %H:%M:%S') - $1${NC}"
+}
+
+log_header() {
+    echo -e "${PURPLE}$(date '+%Y-%m-%d %H:%M:%S') - $1${NC}"
+}
+
+# Progress bar function
+show_progress() {
+    local message="$1"
+    CURRENT_STEP=$((CURRENT_STEP + 1))
+    local percentage=$((CURRENT_STEP * 100 / TOTAL_STEPS))
+    local bar_length=40
+    local filled_length=$((percentage * bar_length / 100))
+    local empty_length=$((bar_length - filled_length))
+    
+    local bar=""
+    for ((i=0; i<filled_length; i++)); do
+        bar="${bar}█"
+    done
+    for ((i=0; i<empty_length; i++)); do
+        bar="${bar}░"
+    done
+    
+    printf "\r[${bar}] ${percentage}%% - ${message}" 
+}
+
+# Update progress total
+update_total_steps() {
+    TOTAL_STEPS=$1
+    CURRENT_STEP=0
+}
+
+# Function to display help
+show_help() {
+    echo "Bot_kilo Trading Bot Installation Script"
+    echo "Usage: $0 [OPTIONS]"
+    echo ""
+    echo "Options:"
+    echo "  -h, --help              Show this help message and exit"
+    echo "  --skip-system           Skip system dependencies installation"
+    echo "  --skip-python           Skip Python dependencies installation"
+    echo "  --skip-verification     Skip verification steps"
+    echo "  --install-extras        Install extra dependencies (dev, jupyter, gpu)"
+    echo "  --editable              Install local package in editable mode"
+    echo ""
+    echo "Examples:"
+    echo "  $0                      # Full installation"
+    echo "  $0 --skip-system        # Skip system dependencies"
+    echo "  $0 --install-extras     # Install everything including extras"
+    echo "  $0 --help               # Show this help"
+}
+
+# Function to parse command-line arguments
+parse_arguments() {
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -h|--help)
+                HELP=true
+                shift
+                ;;
+            --skip-system)
+                SKIP_SYSTEM=true
+                shift
+                ;;
+            --skip-python)
+                SKIP_PYTHON=true
+                shift
+                ;;
+            --skip-verification)
+                SKIP_VERIFICATION=true
+                shift
+                ;;
+            --install-extras)
+                INSTALL_EXTRAS=true
+                shift
+                ;;
+            --editable)
+                INSTALL_EDITABLE=true
+                shift
+                ;;
+            *)
+                log_error "Unknown option: $1"
+                show_help
+                exit 1
+                ;;
+        esac
+    done
 }
 
 # Function to check if we're running on Paperspace Gradient
@@ -58,6 +163,12 @@ detect_os() {
 
 # Function to install system dependencies
 install_system_dependencies() {
+    if [[ "$SKIP_SYSTEM" == true ]]; then
+        log_info "Skipping system dependencies installation as requested"
+        return 0
+    fi
+    
+    show_progress "Installing system dependencies..."
     log_info "Installing system dependencies..."
     
     local os_type=$(detect_os)
@@ -122,6 +233,7 @@ install_system_dependencies() {
 
 # Special function to install LightGBM with multiple fallback methods
 install_lightgbm_with_fallbacks() {
+    show_progress "Installing LightGBM with fallback methods..."
     log_info "Installing LightGBM with fallback methods..."
     
     # Method 1: Direct pip install
@@ -168,6 +280,7 @@ install_lightgbm_with_fallbacks() {
 
 # Function to build LightGBM from source
 build_lightgbm_from_source() {
+    show_progress "Building LightGBM from source..."
     log_info "Building LightGBM from source..."
     
     # Create temporary directory for building
@@ -222,6 +335,7 @@ build_lightgbm_from_source() {
 
 # Function to create and activate virtual environment
 setup_virtual_environment() {
+    show_progress "Setting up virtual environment..."
     log_info "Setting up virtual environment..."
     
     # Create virtual environment if it doesn't exist
@@ -239,6 +353,12 @@ setup_virtual_environment() {
 
 # Function to install Python dependencies with multiple fallback methods
 install_python_dependencies() {
+    if [[ "$SKIP_PYTHON" == true ]]; then
+        log_info "Skipping Python dependencies installation as requested"
+        return 0
+    fi
+    
+    show_progress "Installing Python dependencies..."
     log_info "Installing Python dependencies..."
     
     # Activate virtual environment
@@ -246,6 +366,12 @@ install_python_dependencies() {
     
     # Upgrade pip first
     python -m pip install --upgrade pip
+    
+    # Install editable package if requested
+    if [[ "$INSTALL_EDITABLE" == true ]]; then
+        log_info "Installing local package in editable mode..."
+        python -m pip install --timeout 300 --retries 3 -e .
+    fi
     
     # Method 1: Install from requirements.txt with timeout and retries
     log_info "Method 1: Installing from requirements.txt"
@@ -260,6 +386,7 @@ install_python_dependencies() {
     log_info "Method 2: Installing core dependencies individually"
     
     # Core dependencies
+    show_progress "Installing core dependencies..."
     python -m pip install --timeout 300 --retries 3 python-dotenv>=1.0.0 || \
         python -m pip install --index-url https://pypi.org/simple/ --timeout 300 python-dotenv>=1.0.0
     
@@ -273,6 +400,7 @@ install_python_dependencies() {
         python -m pip install --index-url https://pypi.org/simple/ --timeout 300 PyYAML>=6.0
     
     # Machine Learning dependencies
+    show_progress "Installing machine learning dependencies..."
     python -m pip install --timeout 300 --retries 3 torch>=2.0.0 || \
         python -m pip install --index-url https://pypi.org/simple/ --timeout 300 torch>=2.0.0
     
@@ -292,6 +420,7 @@ install_python_dependencies() {
         python -m pip install --index-url https://pypi.org/simple/ --timeout 300 scipy>=1.10.0
     
     # Reinforcement Learning dependencies
+    show_progress "Installing reinforcement learning dependencies..."
     python -m pip install --timeout 300 --retries 3 "stable-baselines3[extra]>=2.0.0" || \
         python -m pip install --index-url https://pypi.org/simple/ --timeout 300 "stable-baselines3[extra]>=2.0.0"
     
@@ -299,6 +428,7 @@ install_python_dependencies() {
         python -m pip install --index-url https://pypi.org/simple/ --timeout 300 gymnasium>=0.29.0
     
     # Data processing and APIs
+    show_progress "Installing data processing and API dependencies..."
     python -m pip install --timeout 300 --retries 3 aiohttp>=3.8.0 || \
         python -m pip install --index-url https://pypi.org/simple/ --timeout 300 aiohttp>=3.8.0
     
@@ -315,6 +445,7 @@ install_python_dependencies() {
         python -m pip install --index-url https://pypi.org/simple/ --timeout 300 httpx>=0.24.0
     
     # Trading and APIs
+    show_progress "Installing trading and API dependencies..."
     python -m pip install --timeout 300 --retries 3 python-binance>=1.0.0 || \
         python -m pip install --index-url https://pypi.org/simple/ --timeout 300 python-binance>=1.0.0
     
@@ -325,10 +456,12 @@ install_python_dependencies() {
         python -m pip install --index-url https://pypi.org/simple/ --timeout 300 yfinance>=0.2.18
     
     # Notifications
+    show_progress "Installing notification dependencies..."
     python -m pip install --timeout 300 --retries 3 python-telegram-bot>=20.0 || \
         python -m pip install --index-url https://pypi.org/simple/ --timeout 300 python-telegram-bot>=20.0
     
     # Experiment tracking
+    show_progress "Installing experiment tracking dependencies..."
     python -m pip install --timeout 300 --retries 3 mlflow>=2.5.0 || \
         python -m pip install --index-url https://pypi.org/simple/ --timeout 300 mlflow>=2.5.0
     
@@ -336,6 +469,7 @@ install_python_dependencies() {
         python -m pip install --index-url https://pypi.org/simple/ --timeout 300 wandb>=0.15.0
     
     # Visualization
+    show_progress "Installing visualization dependencies..."
     python -m pip install --timeout 300 --retries 3 matplotlib>=3.7.0 || \
         python -m pip install --index-url https://pypi.org/simple/ --timeout 300 matplotlib>=3.7.0
     
@@ -346,6 +480,7 @@ install_python_dependencies() {
         python -m pip install --index-url https://pypi.org/simple/ --timeout 300 plotly>=5.15.0
     
     # Progress bars and CLI
+    show_progress "Installing progress bar and CLI dependencies..."
     python -m pip install --timeout 300 --retries 3 tqdm>=4.65.0 || \
         python -m pip install --index-url https://pypi.org/simple/ --timeout 300 tqdm>=4.65.0
     
@@ -356,6 +491,7 @@ install_python_dependencies() {
         python -m pip install --index-url https://pypi.org/simple/ --timeout 300 click>=8.1.0
     
     # Utilities
+    show_progress "Installing utility dependencies..."
     python -m pip install --timeout 300 --retries 3 joblib>=1.3.0 || \
         python -m pip install --index-url https://pypi.org/simple/ --timeout 300 joblib>=1.3.0
     
@@ -372,6 +508,7 @@ install_python_dependencies() {
         python -m pip install --index-url https://pypi.org/simple/ --timeout 300 arrow>=1.2.3
     
     # Configuration management
+    show_progress "Installing configuration management dependencies..."
     python -m pip install --timeout 300 --retries 3 pydantic>=2.0.0 || \
         python -m pip install --index-url https://pypi.org/simple/ --timeout 300 pydantic>=2.0.0
     
@@ -379,6 +516,7 @@ install_python_dependencies() {
         python -m pip install --index-url https://pypi.org/simple/ --timeout 300 environs>=9.5.0
     
     # Time series and financial analysis
+    show_progress "Installing time series and financial analysis dependencies..."
     python -m pip install --timeout 300 --retries 3 ta>=0.10.2 || \
         python -m pip install --index-url https://pypi.org/simple/ --timeout 300 ta>=0.10.2
     
@@ -389,57 +527,82 @@ install_python_dependencies() {
         python -m pip install --index-url https://pypi.org/simple/ --timeout 300 statsmodels>=0.14.0
     
     # Database support
+    show_progress "Installing database dependencies..."
     python -m pip install --timeout 300 --retries 3 sqlalchemy>=2.0.0 || \
         python -m pip install --index-url https://pypi.org/simple/ --timeout 300 sqlalchemy>=2.0.0
     
     # Better JSON handling
+    show_progress "Installing JSON handling dependencies..."
     python -m pip install --timeout 300 --retries 3 orjson>=3.9.0 || \
         python -m pip install --index-url https://pypi.org/simple/ --timeout 300 orjson>=3.9.0
     
     # WebSocket support
+    show_progress "Installing WebSocket dependencies..."
     python -m pip install --timeout 300 --retries 3 websockets>=11.0.3 || \
         python -m pip install --index-url https://pypi.org/simple/ --timeout 300 websockets>=11.0.3
     
     # Better error handling
+    show_progress "Installing error handling dependencies..."
     python -m pip install --timeout 300 --retries 3 tenacity>=8.2.0 || \
         python -m pip install --index-url https://pypi.org/simple/ --timeout 300 tenacity>=8.2.0
     
     # Hyperparameter optimization
+    show_progress "Installing hyperparameter optimization dependencies..."
     python -m pip install --timeout 300 --retries 3 optuna>=3.0.0 || \
         python -m pip install --index-url https://pypi.org/simple/ --timeout 300 optuna>=3.0.0
     
     # Development and testing
-    python -m pip install --timeout 300 --retries 3 pytest>=7.4.0 || \
-        python -m pip install --index-url https://pypi.org/simple/ --timeout 300 pytest>=7.4.0
-    
-    python -m pip install --timeout 300 --retries 3 pytest-asyncio>=0.21.0 || \
-        python -m pip install --index-url https://pypi.org/simple/ --timeout 300 pytest-asyncio>=0.21.0
-    
-    python -m pip install --timeout 300 --retries 3 pytest-cov>=4.1.0 || \
-        python -m pip install --index-url https://pypi.org/simple/ --timeout 300 pytest-cov>=4.1.0
-    
-    python -m pip install --timeout 300 --retries 3 black>=23.0.0 || \
-        python -m pip install --index-url https://pypi.org/simple/ --timeout 300 black>=23.0.0
-    
-    python -m pip install --timeout 300 --retries 3 flake8>=6.0.0 || \
-        python -m pip install --index-url https://pypi.org/simple/ --timeout 300 flake8>=6.0.0
+    if [[ "$INSTALL_EXTRAS" == true ]]; then
+        show_progress "Installing development and testing dependencies..."
+        python -m pip install --timeout 300 --retries 3 pytest>=7.4.0 || \
+            python -m pip install --index-url https://pypi.org/simple/ --timeout 300 pytest>=7.4.0
+        
+        python -m pip install --timeout 300 --retries 3 pytest-asyncio>=0.21.0 || \
+            python -m pip install --index-url https://pypi.org/simple/ --timeout 300 pytest-asyncio>=0.21.0
+        
+        python -m pip install --timeout 300 --retries 3 pytest-cov>=4.1.0 || \
+            python -m pip install --index-url https://pypi.org/simple/ --timeout 300 pytest-cov>=4.1.0
+        
+        python -m pip install --timeout 300 --retries 3 black>=23.0.0 || \
+            python -m pip install --index-url https://pypi.org/simple/ --timeout 300 black>=23.0.0
+        
+        python -m pip install --timeout 300 --retries 3 flake8>=6.0.0 || \
+            python -m pip install --index-url https://pypi.org/simple/ --timeout 300 flake8>=6.0.0
+    fi
     
     # Jupyter notebook support
-    python -m pip install --timeout 300 --retries 3 jupyter>=1.0.0 || \
-        python -m pip install --index-url https://pypi.org/simple/ --timeout 300 jupyter>=1.0.0
-    
-    python -m pip install --timeout 300 --retries 3 ipykernel>=6.0.0 || \
-        python -m pip install --index-url https://pypi.org/simple/ --timeout 300 ipykernel>=6.0.0
+    if [[ "$INSTALL_EXTRAS" == true ]]; then
+        show_progress "Installing Jupyter notebook dependencies..."
+        python -m pip install --timeout 300 --retries 3 jupyter>=1.0.0 || \
+            python -m pip install --index-url https://pypi.org/simple/ --timeout 300 jupyter>=1.0.0
+        
+        python -m pip install --timeout 300 --retries 3 ipykernel>=6.0.0 || \
+            python -m pip install --index-url https://pypi.org/simple/ --timeout 300 ipykernel>=6.0.0
+    fi
     
     # Docker support
+    show_progress "Installing Docker dependencies..."
     python -m pip install --timeout 300 --retries 3 docker>=6.0.0 || \
         python -m pip install --index-url https://pypi.org/simple/ --timeout 300 docker>=6.0.0
+    
+    # GPU support
+    if [[ "$INSTALL_EXTRAS" == true ]]; then
+        show_progress "Installing GPU dependencies..."
+        python -m pip install --timeout 300 --retries 3 torchaudio>=2.0.0 || \
+            python -m pip install --index-url https://pypi.org/simple/ --timeout 300 torchaudio>=2.0.0
+    fi
     
     log_success "Python dependencies installed successfully"
 }
 
 # Function to verify installation
 verify_installation() {
+    if [[ "$SKIP_VERIFICATION" == true ]]; then
+        log_info "Skipping verification as requested"
+        return 0
+    fi
+    
+    show_progress "Verifying installation..."
     log_info "Verifying installation..."
     
     # Activate virtual environment
@@ -489,6 +652,7 @@ print('LightGBM basic functionality test passed')
 
 # Function to clean up temporary files
 cleanup() {
+    show_progress "Cleaning up temporary files..."
     log_info "Cleaning up temporary files..."
     # Add any cleanup steps here if needed
     log_success "Cleanup completed"
@@ -496,7 +660,29 @@ cleanup() {
 
 # Main installation function
 main() {
-    log_info "Starting comprehensive installation for Bot_kilo trading bot..."
+    # Parse command-line arguments
+    parse_arguments "$@"
+    
+    # Show help if requested
+    if [[ "$HELP" == true ]]; then
+        show_help
+        exit 0
+    fi
+    
+    log_header "Starting comprehensive installation for Bot_kilo trading bot..."
+    
+    # Determine total steps for progress bar
+    local steps=5
+    if [[ "$SKIP_SYSTEM" == false ]]; then
+        steps=$((steps + 1))
+    fi
+    if [[ "$SKIP_PYTHON" == false ]]; then
+        steps=$((steps + 1))
+    fi
+    if [[ "$SKIP_VERIFICATION" == false ]]; then
+        steps=$((steps + 1))
+    fi
+    update_total_steps $steps
     
     # Check if we're on Paperspace Gradient
     if is_paperspace_gradient; then
@@ -534,5 +720,5 @@ main() {
     log_info "To activate the environment, run: source venv/bin/activate"
 }
 
-# Run main function
+# Run main function with all arguments
 main "$@"
