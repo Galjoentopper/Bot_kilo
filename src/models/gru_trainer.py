@@ -489,9 +489,19 @@ class GRUTrainer:
                     "total_epochs": epoch + 1
                 })
                 
-                # Save model
+                # Save model with signature and input example
                 if self.model is not None and mlflow is not None:
-                    mlflow.pytorch.log_model(self.model, "model")
+                    # Create a sample input for signature inference
+                    sample_input = torch.randn(1, self.sequence_length, input_size).to(self.device)
+                    
+                    # Log model with signature and input example
+                    mlflow.pytorch.log_model(
+                        pytorch_model=self.model,
+                        artifact_path="model",
+                        conda_env=None,
+                        signature=None,  # Will be inferred from input_example if provided
+                        input_example=sample_input.cpu().detach().numpy()
+                    )
         
         # Training results
         results = {

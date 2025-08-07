@@ -251,9 +251,21 @@ class LightGBMTrainer:
                 
                 logger.info(f"Validation metrics: {val_metrics}")
             
-            # Save model (if MLflow available)
+            # Save model with signature and input example (if MLflow available)
             if MLFLOW_AVAILABLE:
-                mlflow.lightgbm.log_model(self.model, "model")
+                # Create a sample input for signature inference
+                if isinstance(X_train, pd.DataFrame):
+                    sample_input = X_train.iloc[:1]
+                else:
+                    sample_input = X_train[:1]
+                
+                # Log model with signature and input example
+                mlflow.lightgbm.log_model(
+                    lgb_model=self.model,
+                    artifact_path="model",
+                    signature=None,  # Will be inferred from input_example if provided
+                    input_example=sample_input
+                )
         
         # Training results
         results = {

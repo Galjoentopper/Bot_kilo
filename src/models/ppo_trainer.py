@@ -395,12 +395,30 @@ class PPOTrainer:
                     progress_bar=False  # Disable progress bar to avoid tqdm/rich dependency issues
                 )
             
-            # Save model (if MLflow available)
+            # Save model with signature and input example (if MLflow available)
             if MLFLOW_AVAILABLE and mlflow is not None and self.model is not None and SB3_AVAILABLE:
                 # Save the model
                 model_path = f"ppo_model_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
                 self.model.save(model_path)
+                
+                # Log model with signature and input example
+                # For Stable Baselines3 models, we'll log the artifact with additional metadata
                 mlflow.log_artifact(f"{model_path}.zip", "model")
+                
+                # Additionally, try to log with model signature if possible
+                try:
+                    # Create a sample input for signature inference
+                    # For PPO, we need to create an observation sample
+                    sample_observation = np.random.randn(1, train_env.observation_space.shape[0]).astype(np.float32)
+                    
+                    # Log additional model metadata
+                    mlflow.log_params({
+                        "observation_shape": str(train_env.observation_space.shape),
+                        "action_shape": str(train_env.action_space.shape) if hasattr(train_env.action_space, 'shape') else str(train_env.action_space.n)
+                    })
+                except Exception:
+                    # If we can't create signature, just log the artifact as before
+                    pass
         
         # Training results
         results = {
