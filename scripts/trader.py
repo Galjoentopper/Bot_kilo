@@ -206,6 +206,26 @@ class PaperTrader:
                     except Exception as e:
                         self.logger.logger.debug(f"LightGBM prediction failed for {symbol}: {e}")
                 
+                # PPO prediction (if available)
+                if 'ppo' in self.models:
+                    try:
+                        # For PPO, we need to prepare the observation space
+                        # Use the latest features as observation
+                        observation = latest_features[-1:]  # Get last row as observation
+                        if observation.shape[1] > 0:  # Ensure we have features
+                            ppo_action, _ = self.models['ppo'].predict(observation, deterministic=True)
+                            # Convert action to prediction value
+                            # Action 0 = Hold, 1 = Buy, 2 = Sell
+                            if ppo_action == 1:
+                                ppo_pred = 0.002  # Strong buy signal
+                            elif ppo_action == 2:
+                                ppo_pred = -0.002  # Strong sell signal
+                            else:
+                                ppo_pred = 0.0  # Hold signal
+                            predictions.append(('ppo', ppo_pred))
+                    except Exception as e:
+                        self.logger.logger.debug(f"PPO prediction failed for {symbol}: {e}")
+                
                 # Convert predictions to signals
                 if predictions:
                     # Simple ensemble: average predictions
@@ -222,8 +242,11 @@ class PaperTrader:
                 
                 signals[symbol] = signal
                 
-                if signal != 0:
+                if predictions and signal != 0:
+                    avg_prediction = np.mean([pred for _, pred in predictions])
                     self.logger.logger.info(f"Signal for {symbol}: {signal} (prediction: {avg_prediction:.6f})")
+                elif not predictions:
+                    self.logger.logger.debug(f"No predictions available for {symbol}")
             
             except Exception as e:
                 self.logger.logger.error(f"Error generating signal for {symbol}: {e}")

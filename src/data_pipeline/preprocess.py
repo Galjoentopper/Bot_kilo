@@ -104,11 +104,44 @@ class DataPreprocessor:
         else:
             X_array = X
         
+        # Convert to numpy array if needed
+        if not isinstance(X_array, np.ndarray):
+            X_array = np.array(X_array)
+        
+        # Handle missing values with more robust approach
+        # Check if we have excessive NaN values
+        nan_count = np.count_nonzero(np.isnan(X_array))
+        if nan_count > 0:
+            nan_ratio = nan_count / X_array.size
+            if nan_ratio > 0.1:
+                logger.warning(f"High NaN ratio ({nan_ratio:.2%}) in transform data")
+        
         # Handle missing values
         X_imputed = self.imputer.transform(X_array)
         
+        # Convert to numpy array if needed
+        if not isinstance(X_imputed, np.ndarray):
+            X_imputed = np.array(X_imputed)
+        
+        # Check for any remaining NaN values after imputation
+        remaining_nan = np.count_nonzero(np.isnan(X_imputed))
+        if remaining_nan > 0:
+            logger.warning(f"{remaining_nan} NaN values remain after imputation, filling with 0")
+            # Use a more compatible approach for NaN handling
+            X_imputed = np.where(np.isnan(X_imputed), 0.0, X_imputed)
+        
         # Scale features
         X_scaled = self.scaler.transform(X_imputed)
+        
+        # Convert to numpy array if needed
+        if not isinstance(X_scaled, np.ndarray):
+            X_scaled = np.array(X_scaled)
+        
+        # Check for infinite values after scaling
+        inf_count = np.count_nonzero(np.isinf(X_scaled))
+        if inf_count > 0:
+            logger.warning(f"{inf_count} infinite values found after scaling, clipping to finite range")
+            X_scaled = np.clip(X_scaled, -1e6, 1e6)  # Clip extreme values
         
         return X_scaled
     
@@ -123,6 +156,22 @@ class DataPreprocessor:
         Returns:
             Transformed features as numpy array
         """
+        # Handle case where X might have NaN values that need special handling
+        if isinstance(X, pd.DataFrame):
+            X_array = X.values
+        else:
+            X_array = X
+            
+        # Convert to numpy array if needed
+        if not isinstance(X_array, np.ndarray):
+            X_array = np.array(X_array)
+            
+        # Check for excessive NaN values
+        nan_count = np.count_nonzero(np.isnan(X_array))
+        nan_ratio = nan_count / X_array.size if X_array.size > 0 else 0
+        if nan_ratio > 0.5:
+            logger.warning(f"High NaN ratio ({nan_ratio:.2%}) in input data")
+            
         return self.fit(X, feature_names).transform(X)
     
     def create_sequences(

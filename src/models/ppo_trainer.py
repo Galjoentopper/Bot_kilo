@@ -590,8 +590,14 @@ class PPOTrainer:
         if not SB3_AVAILABLE:
             raise ImportError("stable-baselines3 is required for PPO training")
         
-        if not os.path.exists(f"{filepath}.zip"):
-            raise FileNotFoundError(f"Model file not found: {filepath}.zip")
+        # Check if filepath already has .zip extension
+        if not filepath.endswith('.zip'):
+            filepath_with_extension = f"{filepath}.zip"
+        else:
+            filepath_with_extension = filepath
+        
+        if not os.path.exists(filepath_with_extension):
+            raise FileNotFoundError(f"Model file not found: {filepath_with_extension}")
         
         # Create trainer instance
         trainer = cls(config)
@@ -602,7 +608,7 @@ class PPOTrainer:
         else:
             trainer.model = PPO()
         
-        logger.info(f"PPO model loaded from {filepath}")
+        logger.info(f"PPO model loaded from {filepath_with_extension}")
         return trainer
     
     def hyperparameter_tuning(

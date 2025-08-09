@@ -103,8 +103,8 @@ api:
 notifications:
   telegram:
     enabled: true
-    chat_id: ""  # To be set via environment variable
-    bot_token: ""  # To be set via environment variable
+    chat_id: "7988790407"  # To be set via environment variable
+    bot_token: "7733436451:AAH6Sls8uL4fEgd6Ty7VEKSBIMauhaVkN4c"  # To be set via environment variable
     
 # Logging
 logging:

@@ -101,7 +101,18 @@ class FeatureEngine:
         if nan_count_before > 0:
             logger.warning(f"Found {nan_count_before} NaN values in generated features")
         
+        # Improved NaN handling with minimum data validation
         # Forward fill, then backward fill, then fill remaining with 0
+        # But first, let's identify columns that are mostly NaN and handle them separately
+        for col in features_df.columns:
+            # Check if column is mostly NaN (more than 50%)
+            nan_ratio = features_df[col].isnull().sum() / len(features_df)
+            if nan_ratio > 0.5:
+                # For mostly NaN columns, fill with 0
+                features_df[col] = features_df[col].fillna(0)
+                logger.debug(f"Column {col} had high NaN ratio ({nan_ratio:.2f}), filled with 0")
+        
+        # Standard fill for remaining NaN values
         features_df = features_df.ffill().bfill().fillna(0)
         
         # Final validation - ensure no NaN or inf values remain
@@ -133,15 +144,16 @@ class FeatureEngine:
         
         # Price ranges
         df['price_range'] = df['high'] - df['low']
-        df['price_range_pct'] = df['price_range'] / df['close']
+        # Avoid division by zero
+        df['price_range_pct'] = df['price_range'] / (df['close'] + 1e-10)
         
         # Body and shadow features
         df['body'] = abs(df['close'] - df['open'])
-        df['body_pct'] = df['body'] / df['close']
+        df['body_pct'] = df['body'] / (df['close'] + 1e-10)
         df['upper_shadow'] = df['high'] - np.maximum(df['open'], df['close'])
         df['lower_shadow'] = np.minimum(df['open'], df['close']) - df['low']
-        df['upper_shadow_pct'] = df['upper_shadow'] / df['close']
-        df['lower_shadow_pct'] = df['lower_shadow'] / df['close']
+        df['upper_shadow_pct'] = df['upper_shadow'] / (df['close'] + 1e-10)
+        df['lower_shadow_pct'] = df['lower_shadow'] / (df['close'] + 1e-10)
         
         # Returns for different periods - with error handling
         returns_periods = self.config.get('returns_periods', [1, 5, 15])
@@ -150,10 +162,14 @@ class FeatureEngine:
             returns_periods = [1, 5, 15]
             
         for period in returns_periods:
-            df[f'return_{period}'] = df['close'].pct_change(period)
-            df[f'log_return_{period}'] = np.log(df['close'] / df['close'].shift(period))
-            df[f'high_return_{period}'] = df['high'].pct_change(period)
-            df[f'low_return_{period}'] = df['low'].pct_change(period)
+            # Avoid division by zero in returns calculation
+            df[f'return_{period}'] = df['close'].pct_change(period).fillna(0)
+            # Log returns with safety check
+            close_shifted = df['close'].shift(period)
+            log_return = np.log((df['close'] + 1e-10) / (close_shifted + 1e-10))
+            df[f'log_return_{period}'] = pd.Series(log_return, index=df.index).fillna(0)
+            df[f'high_return_{period}'] = df['high'].pct_change(period).fillna(0)
+            df[f'low_return_{period}'] = df['low'].pct_change(period).fillna(0)
         
         return df
     
@@ -163,13 +179,19 @@ class FeatureEngine:
         sma_periods = self.config.get('sma_periods', [5, 10, 20, 50])
         for period in sma_periods:
             df[f'sma_{period}'] = df['close'].rolling(window=period).mean()
-            df[f'sma_{period}_ratio'] = df['close'] / df[f'sma_{period}']
+            # Fill NaN values in SMA
+            df[f'sma_{period}'] = df[f'sma_{period}'].bfill().fillna(df['close'])
+            # SMA ratio - avoid division by zero
+            df[f'sma_{period}_ratio'] = df['close'] / (df[f'sma_{period}'] + 1e-10)
         
         # Exponential Moving Averages - with error handling
         ema_periods = self.config.get('ema_periods', [5, 10, 20, 50])
         for period in ema_periods:
             df[f'ema_{period}'] = df['close'].ewm(span=period).mean()
-            df[f'ema_{period}_ratio'] = df['close'] / df[f'ema_{period}']
+            # Fill NaN values in EMA
+            df[f'ema_{period}'] = df[f'ema_{period}'].bfill().fillna(df['close'])
+            # EMA ratio - avoid division by zero
+            df[f'ema_{period}_ratio'] = df['close'] / (df[f'ema_{period}'] + 1e-10)
         
         # RSI - with error handling
         rsi_period = self.config.get('rsi_period', 14)
@@ -195,13 +217,15 @@ class FeatureEngine:
         df['bb_upper'] = bb_upper
         df['bb_middle'] = bb_middle
         df['bb_lower'] = bb_lower
-        df['bb_width'] = (bb_upper - bb_lower) / bb_middle
-        df['bb_position'] = (df['close'] - bb_lower) / (bb_upper - bb_lower)
+        # Avoid division by zero in Bollinger Band calculations
+        df['bb_width'] = (bb_upper - bb_lower) / (bb_middle + 1e-10)
+        df['bb_position'] = (df['close'] - bb_lower) / (bb_upper - bb_lower + 1e-10)
         
         # ATR (Average True Range) - with error handling
         atr_period = self.config.get('atr_period', 14)
         df['atr'] = self._calculate_atr(df, atr_period)
-        df['atr_pct'] = df['atr'] / df['close']
+        # Avoid division by zero in ATR percentage
+        df['atr_pct'] = df['atr'] / (df['close'] + 1e-10)
         
         # Stochastic Oscillator - with error handling
         stoch_k_period = self.config.get('stoch_k_period', 14)
@@ -223,18 +247,27 @@ class FeatureEngine:
         # Volume moving averages
         df['volume_sma_10'] = df['volume'].rolling(window=10).mean()
         df['volume_sma_20'] = df['volume'].rolling(window=20).mean()
-        df['volume_ratio'] = df['volume'] / df['volume_sma_20']
+        # Fill NaN values in volume SMAs
+        df['volume_sma_10'] = df['volume_sma_10'].bfill().fillna(0)
+        df['volume_sma_20'] = df['volume_sma_20'].bfill().fillna(0)
+        # Volume ratio - avoid division by zero
+        df['volume_ratio'] = df['volume'] / (df['volume_sma_20'] + 1e-10)
+        df['volume_ratio'] = df['volume_ratio'].bfill().fillna(1)
         
         # Volume-price features
-        df['vwap'] = (df['volume'] * df['hlc_avg']).cumsum() / df['volume'].cumsum()
+        # Avoid division by zero in VWAP calculation
+        volume_cumsum = df['volume'].cumsum()
+        vwap_numerator = (df['volume'] * df['hlc_avg']).cumsum()
+        df['vwap'] = vwap_numerator / (volume_cumsum + 1e-10)
+        df['vwap'] = df['vwap'].bfill().fillna(df['hlc_avg'])
         df['volume_price_trend'] = df['volume'] * (df['close'] - df['open'])
         
         # On-Balance Volume (OBV)
         df['obv'] = self._calculate_obv(df)
         
-        # Volume Rate of Change
-        df['volume_roc_5'] = df['volume'].pct_change(5)
-        df['volume_roc_10'] = df['volume'].pct_change(10)
+        # Volume Rate of Change - avoid division by zero
+        df['volume_roc_5'] = df['volume'].pct_change(5).fillna(0)
+        df['volume_roc_10'] = df['volume'].pct_change(10).fillna(0)
         
         return df
     
@@ -244,19 +277,24 @@ class FeatureEngine:
         for period in volatility_periods:
             # Rolling standard deviation
             df[f'volatility_{period}'] = df['return_1'].rolling(window=period).std()
+            # Fill NaN values in volatility
+            df[f'volatility_{period}'] = df[f'volatility_{period}'].fillna(0)
             
             # Historical volatility (annualized)
             df[f'hist_vol_{period}'] = df[f'volatility_{period}'] * np.sqrt(365 * 24 * 4)  # 15-min intervals
             
             # Parkinson volatility (high-low based)
-            log_hl_ratio = pd.Series(np.log(df['high'] / df['low']), index=df.index)
-            df[f'parkinson_vol_{period}'] = np.sqrt(
+            # Avoid division by zero in log calculation
+            high_low_ratio = df['high'] / (df['low'] + 1e-10)
+            log_hl_ratio = pd.Series(np.log(high_low_ratio), index=df.index)
+            parkinson_vol = np.sqrt(
                 (log_hl_ratio ** 2).rolling(window=period).mean() / (4 * np.log(2))
             )
+            df[f'parkinson_vol_{period}'] = parkinson_vol.fillna(0)
         
-        # Volatility ratios
-        df['vol_ratio_10_20'] = df['volatility_10'] / df['volatility_20']
-        df['vol_ratio_20_50'] = df['volatility_20'] / df['volatility_50']
+        # Volatility ratios - handle division by zero
+        df['vol_ratio_10_20'] = df['volatility_10'] / (df['volatility_20'] + 1e-10)
+        df['vol_ratio_20_50'] = df['volatility_20'] / (df['volatility_50'] + 1e-10)
         
         return df
     
@@ -264,11 +302,16 @@ class FeatureEngine:
         """Add momentum-based features."""
         # Rate of Change
         for period in [5, 10, 20]:
-            df[f'roc_{period}'] = ((df['close'] - df['close'].shift(period)) / df['close'].shift(period)) * 100
+            # Avoid division by zero
+            df[f'roc_{period}'] = ((df['close'] - df['close'].shift(period)) / (df['close'].shift(period) + 1e-10)) * 100
+            # Fill NaN values
+            df[f'roc_{period}'] = df[f'roc_{period}'].bfill().fillna(0)
         
         # Momentum
         for period in [5, 10, 20]:
             df[f'momentum_{period}'] = df['close'] - df['close'].shift(period)
+            # Fill NaN values
+            df[f'momentum_{period}'] = df[f'momentum_{period}'].bfill().fillna(0)
         
         # Williams %R
         for period in [14, 21]:
@@ -304,7 +347,9 @@ class FeatureEngine:
         # Market session features
         if isinstance(df.index, pd.DatetimeIndex):
             df['is_weekend'] = (df.index.dayofweek >= 5).astype(int)
-            df['is_night'] = ((df.index.hour >= 22) | (df.index.hour <= 6)).astype(int)
+            # Handle case where hour might be NaN
+            hour_values = df.index.hour if hasattr(df.index, 'hour') else np.zeros(len(df))
+            df['is_night'] = ((hour_values >= 22) | (hour_values <= 6)).astype(int)
         
         return df
     
@@ -333,7 +378,9 @@ class FeatureEngine:
         
         # Bollinger Band signals
         if 'bb_position' in df.columns:
-            df['bb_squeeze'] = (df['bb_width'] < df['bb_width'].rolling(20).mean()).astype(int)
+            # Avoid division by zero in Bollinger Band squeeze calculation
+            bb_width_rolling = df['bb_width'].rolling(20).mean()
+            df['bb_squeeze'] = (df['bb_width'] < (bb_width_rolling + 1e-10)).astype(int)
             df['bb_breakout_upper'] = (df['close'] > df['bb_upper']).astype(int)
             df['bb_breakout_lower'] = (df['close'] < df['bb_lower']).astype(int)
         
@@ -369,12 +416,18 @@ class FeatureEngine:
         macd_line = ema_fast - ema_slow
         macd_signal = macd_line.ewm(span=signal).mean()
         macd_histogram = macd_line - macd_signal
+        # Fill initial NaN values
+        macd_line = macd_line.bfill().fillna(0)
+        macd_signal = macd_signal.bfill().fillna(0)
+        macd_histogram = macd_histogram.bfill().fillna(0)
         return macd_line, macd_signal, macd_histogram
     
     def _calculate_bollinger_bands(self, prices: pd.Series, period: int = 20, std_dev: float = 2) -> Tuple[pd.Series, pd.Series, pd.Series]:
         """Calculate Bollinger Bands."""
         middle = prices.rolling(window=period).mean()
         std = prices.rolling(window=period).std()
+        # Handle case where std is NaN or 0
+        std = std.fillna(0)
         upper = middle + (std * std_dev)
         lower = middle - (std * std_dev)
         return upper, middle, lower
@@ -385,14 +438,23 @@ class FeatureEngine:
         high_close = np.abs(df['high'] - df['close'].shift())
         low_close = np.abs(df['low'] - df['close'].shift())
         true_range = pd.Series(np.maximum(high_low, np.maximum(high_close, low_close)), index=df.index)
-        return true_range.rolling(window=period).mean()
+        atr = true_range.rolling(window=period).mean()
+        # Fill initial NaN values
+        atr = atr.bfill().fillna(0)
+        return atr
     
     def _calculate_stochastic(self, df: pd.DataFrame, k_period: int = 14, d_period: int = 3) -> Tuple[pd.Series, pd.Series]:
         """Calculate Stochastic Oscillator."""
         lowest_low = df['low'].rolling(window=k_period).min()
         highest_high = df['high'].rolling(window=k_period).max()
-        k_percent = 100 * ((df['close'] - lowest_low) / (highest_high - lowest_low))
+        # Avoid division by zero
+        denominator = highest_high - lowest_low
+        k_percent = 100 * ((df['close'] - lowest_low) / (denominator + 1e-10))
+        # Fill initial NaN values
+        k_percent = k_percent.bfill().fillna(50)  # Fill with neutral value
         d_percent = k_percent.rolling(window=d_period).mean()
+        # Fill initial NaN values for D line
+        d_percent = d_percent.bfill().fillna(50)  # Fill with neutral value
         return k_percent, d_percent
     
     def _calculate_cci(self, df: pd.DataFrame, period: int = 20) -> pd.Series:
@@ -407,21 +469,30 @@ class FeatureEngine:
         # Clip extreme values to prevent numerical instability
         cci = pd.Series(np.clip(cci, -500, 500), index=cci.index)
         
+        # Fill initial NaN values
+        cci = cci.bfill().fillna(0)
+        
         return cci
     
     def _calculate_obv(self, df: pd.DataFrame) -> pd.Series:
         """Calculate On-Balance Volume."""
         obv = pd.Series(index=df.index, dtype=float)
-        obv.iloc[0] = df['volume'].iloc[0]
+        if len(df) > 0:
+            obv.iloc[0] = df['volume'].iloc[0] if len(df) > 0 else 0
         
         for i in range(1, len(df)):
-            if df['close'].iloc[i] > df['close'].iloc[i-1]:
-                obv.iloc[i] = obv.iloc[i-1] + df['volume'].iloc[i]
-            elif df['close'].iloc[i] < df['close'].iloc[i-1]:
-                obv.iloc[i] = obv.iloc[i-1] - df['volume'].iloc[i]
+            if len(df) > i and len(df['close']) > i and len(df['volume']) > i:
+                if df['close'].iloc[i] > df['close'].iloc[i-1]:
+                    obv.iloc[i] = obv.iloc[i-1] + df['volume'].iloc[i]
+                elif df['close'].iloc[i] < df['close'].iloc[i-1]:
+                    obv.iloc[i] = obv.iloc[i-1] - df['volume'].iloc[i]
+                else:
+                    obv.iloc[i] = obv.iloc[i-1]
             else:
-                obv.iloc[i] = obv.iloc[i-1]
+                obv.iloc[i] = obv.iloc[i-1] if i > 0 else 0
         
+        # Fill any remaining NaN values
+        obv = obv.bfill().fillna(0)
         return obv
     
     def _calculate_williams_r(self, df: pd.DataFrame, period: int = 14) -> pd.Series:
@@ -435,6 +506,9 @@ class FeatureEngine:
         
         # Ensure Williams %R is within valid range [-100, 0]
         williams_r = pd.Series(np.clip(williams_r, -100, 0), index=williams_r.index)
+        
+        # Fill initial NaN values
+        williams_r = williams_r.bfill().fillna(-50)  # Fill with neutral value
         
         return williams_r
     
