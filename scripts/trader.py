@@ -15,10 +15,17 @@ from datetime import datetime, timedelta
 from pathlib import Path
 import pandas as pd
 import numpy as np
+import yfinance as yf
+import ccxt
+import sqlite3
+from typing import Optional, Dict, Any
+import json
+
+# Add the parent directory to the Python path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 # Import from installed package
 from src.utils.logger import setup_logging, TradingBotLogger
-from src.data_pipeline.loader import DataLoader
 from src.data_pipeline.features import FeatureEngine
 from src.data_pipeline.preprocess import DataPreprocessor
 from src.models.gru_trainer import GRUTrainer
@@ -44,9 +51,10 @@ class PaperTrader:
         
         # Initialize components
         self.logger = TradingBotLogger()
-        self.data_loader = DataLoader(config.get('data', {}).get('data_dir', './data'))
+        # Use real-time data fetching instead of data folder
         self.feature_engine = FeatureEngine(config.get('features', {}))
         self.preprocessor = DataPreprocessor()
+        # Remove data_dir dependency - trader uses real-time data only
         
         # Initialize notification system
         try:
@@ -70,16 +78,21 @@ class PaperTrader:
         self.max_position_size = config.get('trading', {}).get('max_position_size', 0.1)
         self.transaction_fee = config.get('trading', {}).get('transaction_fee', 0.001)
         
+        # Data caching for performance
+        self.data_cache = {}
+        self.cache_expiry = {}
+        self.cache_duration = 60  # Cache data for 60 seconds
+        
         self.logger.logger.info(f"Paper trader initialized with ${self.portfolio_value:,.2f}")
     
     def load_models(self):
         """Load trained models."""
         try:
-            # Find latest model files
+            # Find latest model files with correct patterns
             model_files = {
                 'gru': self._find_latest_model('gru_model_*.pth'),
                 'lightgbm': self._find_latest_model('lightgbm_model_*.pkl'),
-                'ppo': self._find_latest_model('ppo_model_*')
+                'ppo': self._find_latest_model('ppo_model_*.zip')  # PPO models are .zip files
             }
             
             # Load GRU model
@@ -112,7 +125,37 @@ class PaperTrader:
         except Exception as e:
             self.logger.logger.error(f"Error loading models: {e}")
     
-    def _find_latest_model(self, pattern: str) -> str:
+    def _convert_symbol_format(self, symbol: str) -> str:
+        """
+        Convert symbol format to ccxt standard format.
+        
+        Args:
+            symbol: Symbol in format like BTCEUR, SOLEUR, etc.
+            
+        Returns:
+            Symbol in ccxt format like BTC/EUR, SOL/EUR, etc.
+        """
+        # Handle different base currencies
+        if symbol.endswith('EUR'):
+            base = symbol[:-3]
+            return f"{base}/EUR"
+        elif symbol.endswith('USD'):
+            base = symbol[:-3]
+            return f"{base}/USD"
+        elif symbol.endswith('USDT'):
+            base = symbol[:-4]
+            return f"{base}/USDT"
+        elif symbol.endswith('BTC'):
+            base = symbol[:-3]
+            return f"{base}/BTC"
+        elif symbol.endswith('ETH'):
+            base = symbol[:-3]
+            return f"{base}/ETH"
+        else:
+            # If already in correct format or unknown format, return as is
+            return symbol
+
+    def _find_latest_model(self, pattern: str) -> Optional[str]:
         """Find the latest model file matching pattern."""
         import glob
         
@@ -122,29 +165,231 @@ class PaperTrader:
             return max(model_files, key=os.path.getmtime)
         return None
     
+
     async def get_market_data(self) -> dict:
-        """Get latest market data for all symbols."""
+        """Get latest market data for all symbols using ccxt with error handling."""
         market_data = {}
+        
+        # Check cache first
+        current_time = time.time()
+        cached_data = self._get_cached_data(current_time)
+        if cached_data:
+            self.logger.logger.debug("Using cached market data")
+            return cached_data
+        
+        # Initialize exchange connection with error handling
+        exchange = None
+        try:
+            # Use synchronous ccxt for now - async ccxt requires different import
+            exchange = ccxt.binance({
+                'enableRateLimit': True,
+                'options': {
+                    'defaultType': 'spot'
+                },
+                'timeout': 30000  # 30 second timeout
+            })
+            # Load markets synchronously
+            exchange.load_markets()
+        except Exception as e:
+            self.logger.logger.error(f"Error initializing exchange connection: {e}")
+            # Synchronous ccxt doesn't require explicit connection closing
+            # Connection will be closed automatically
+            return market_data
+        
+        # Track API call statistics
+        api_calls = 0
+        api_errors = 0
         
         for symbol in self.symbols:
             try:
-                # Get recent data (last 100 periods for feature calculation)
-                df = self.data_loader.get_latest_data(symbol, n_periods=100)
+                # Fetch OHLCV data with retry mechanism
+                max_retries = 3
+                retry_count = 0
+                ohlcv = None
                 
-                if not df.empty:
-                    # Generate features
+                while retry_count < max_retries:
+                    try:
+                        # Convert symbol format to ccxt standard format
+                        formatted_symbol = self._convert_symbol_format(symbol)
+                        # Use synchronous version of ccxt
+                        ohlcv = exchange.fetch_ohlcv(formatted_symbol, '15m', limit=100)
+                        api_calls += 1
+                        break
+                    except ccxt.RateLimitExceeded as e:
+                        self.logger.logger.warning(f"Rate limit exceeded for {symbol}, waiting...")
+                        # Use asyncio.sleep for async method
+                        await asyncio.sleep(10)  # Wait 10 seconds before retry
+                        retry_count += 1
+                    except ccxt.NetworkError as e:
+                        self.logger.logger.warning(f"Network error for {symbol}: {e}")
+                        await asyncio.sleep(5)  # Wait 5 seconds before retry
+                        retry_count += 1
+                    except Exception as e:
+                        self.logger.logger.error(f"Error fetching data for {symbol}: {e}")
+                        retry_count += 1
+                
+                # Check if we successfully fetched data
+                if ohlcv is None:
+                    api_errors += 1
+                    self.logger.logger.warning(f"Failed to fetch data for {symbol} after {max_retries} attempts")
+                    continue
+                
+                # Convert to DataFrame
+                if not ohlcv:
+                    self.logger.logger.warning(f"No data returned for {symbol}")
+                    continue
+                    
+                df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                df['datetime'] = pd.to_datetime(df['timestamp'], unit='ms')
+                df = df.set_index('datetime')
+                
+                # Add missing columns with default values for compatibility
+                df['quote_volume'] = df['volume']
+                df['trades'] = 0
+                df['taker_buy_base'] = 0
+                df['taker_buy_quote'] = 0
+                
+                # Convert to numeric and handle errors
+                numeric_columns = ['open', 'high', 'low', 'close', 'volume']
+                for col in numeric_columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce')
+                
+                # Use enhanced validation method
+                if not self._validate_market_data(df, symbol):
+                    continue
+                
+                # Generate features
+                try:
                     features_df = self.feature_engine.generate_all_features(df)
+                    self.logger.logger.debug(f"Generated {len(features_df.columns)} features for {symbol}")
+                    
+                    # Validate features
+                    feature_nan_count = features_df.isnull().sum().sum()
+                    if feature_nan_count > 0:
+                        self.logger.logger.warning(f"Found {feature_nan_count} NaN values in {symbol} features")
+                        # Try to clean features
+                        features_df = features_df.fillna(0)
+                    
                     market_data[symbol] = features_df
                     
                     # Update last price
-                    self.last_prices[symbol] = df['close'].iloc[-1]
-                else:
-                    self.logger.logger.warning(f"No data available for {symbol}")
-            
+                    self.last_prices[symbol] = float(df['close'].iloc[-1])
+                    self.logger.logger.debug(f"Updated price for {symbol}: {self.last_prices[symbol]}")
+                    
+                except Exception as e:
+                    self.logger.logger.error(f"Error generating features for {symbol}: {e}")
+                    continue
+                
             except Exception as e:
+                api_errors += 1
                 self.logger.logger.error(f"Error getting data for {symbol}: {e}")
+                # Continue with other symbols even if one fails
+                continue
+        
+        # Synchronous ccxt doesn't require explicit connection closing
+        # Connection will be closed automatically
+        
+        # Cache the data if we got any
+        if market_data:
+            self._cache_data(market_data, time.time())
+        
+        # Log API statistics
+        self.logger.logger.info(f"API calls: {api_calls}, Errors: {api_errors}")
+        
+        if not market_data:
+            self.logger.logger.warning("No market data available for any symbol")
+        else:
+            self.logger.logger.info(f"Successfully fetched data for {len(market_data)} symbols")
         
         return market_data
+    
+    def _get_cached_data(self, current_time: float) -> Optional[Dict[str, Any]]:
+        """Get cached data if still valid."""
+        if not self.data_cache:
+            return None
+        
+        # Check if cache is still valid
+        for symbol in self.symbols:
+            if symbol not in self.cache_expiry or current_time > self.cache_expiry[symbol]:
+                return None
+        
+        return self.data_cache.copy()
+    
+    def _cache_data(self, data: Dict[str, Any], current_time: float) -> None:
+        """Cache market data with expiry time."""
+        self.data_cache = data.copy()
+        expiry_time = current_time + self.cache_duration
+        
+        for symbol in data.keys():
+            self.cache_expiry[symbol] = expiry_time
+    
+    def _validate_market_data(self, df: pd.DataFrame, symbol: str) -> bool:
+        """
+        Enhanced data validation for market data.
+        
+        Args:
+            df: DataFrame with market data
+            symbol: Symbol being validated
+            
+        Returns:
+            True if data is valid, False otherwise
+        """
+        if df.empty:
+            self.logger.logger.warning(f"Empty DataFrame for {symbol}")
+            return False
+        
+        # Check required columns
+        required_columns = ['open', 'high', 'low', 'close', 'volume']
+        missing_cols = [col for col in required_columns if col not in df.columns]
+        if missing_cols:
+            self.logger.logger.error(f"Missing columns {missing_cols} for {symbol}")
+            return False
+        
+        # Check for NaN values in critical columns
+        for col in required_columns:
+            nan_count = df[col].isnull().sum()
+            if nan_count > 0:
+                self.logger.logger.warning(f"Found {nan_count} NaN values in {col} for {symbol}")
+                # Fill NaN values with forward fill, then backward fill
+                df[col] = df[col].ffill().bfill()
+        
+        # Check for negative prices or volumes
+        for col in ['open', 'high', 'low', 'close']:
+            negative_count = (df[col] <= 0).sum()
+            if negative_count > 0:
+                self.logger.logger.error(f"Found {negative_count} non-positive prices in {col} for {symbol}")
+                return False
+        
+        negative_volumes = (df['volume'] < 0).sum()
+        if negative_volumes > 0:
+            self.logger.logger.error(f"Found {negative_volumes} negative volumes for {symbol}")
+            return False
+        
+        # Validate OHLC relationships
+        invalid_high = (df['high'] < df[['open', 'close']].max(axis=1)).sum()
+        invalid_low = (df['low'] > df[['open', 'close']].min(axis=1)).sum()
+        if invalid_high > 0 or invalid_low > 0:
+            self.logger.logger.error(f"Invalid OHLC relationships in {symbol}: {invalid_high} high, {invalid_low} low")
+            return False
+        
+        # Check data freshness (should be within last 2 hours)
+        if isinstance(df.index, pd.DatetimeIndex):
+            latest_timestamp = df.index.max()
+            # Ensure both timestamps have the same timezone
+            if latest_timestamp.tz is None:
+                latest_timestamp = latest_timestamp.tz_localize('UTC')
+            current_time = pd.Timestamp.now(tz='UTC')
+            time_diff = current_time - latest_timestamp
+            if time_diff > pd.Timedelta(hours=2):
+                self.logger.logger.warning(f"Stale data for {symbol}: {time_diff} old")
+                return False
+        
+        # Check for sufficient data points
+        if len(df) < 50:
+            self.logger.logger.warning(f"Insufficient data points for {symbol}: {len(df)} (need at least 50)")
+            return False
+        
+        return True
     
     def generate_signals(self, market_data: dict) -> dict:
         """
@@ -158,24 +403,32 @@ class PaperTrader:
         """
         signals = {}
         
+        self.logger.logger.debug(f"Generating signals for {len(market_data)} symbols")
+        
         for symbol, df in market_data.items():
             try:
+                self.logger.logger.debug(f"Processing {symbol}")
                 signal = 0  # Default: hold
                 
                 if df.empty:
+                    self.logger.logger.debug(f"Empty dataframe for {symbol}")
                     signals[symbol] = signal
                     continue
                 
                 # Prepare features
                 feature_names = self.feature_engine.get_feature_names(df)
+                self.logger.logger.debug(f"Found {len(feature_names)} feature names for {symbol}")
                 features = df[feature_names].dropna()
+                self.logger.logger.debug(f"Features shape for {symbol}: {features.shape}")
                 
                 if features.empty:
+                    self.logger.logger.debug(f"Empty features for {symbol}")
                     signals[symbol] = signal
                     continue
                 
                 # Get latest features
                 latest_features = features.iloc[-1:].values
+                self.logger.logger.debug(f"Latest features shape for {symbol}: {latest_features.shape}")
                 
                 # Ensemble prediction
                 predictions = []
@@ -186,22 +439,54 @@ class PaperTrader:
                         # Prepare sequence for GRU
                         sequence_length = self.config.get('models', {}).get('gru', {}).get('sequence_length', 20)
                         if len(features) >= sequence_length:
-                            # Scale features
-                            features_scaled = self.preprocessor.fit_transform(features)
+                            # Scale features using preprocessor (fit on current data for consistency)
+                            try:
+                                features_scaled = self.preprocessor.fit_transform(features)
+                            except Exception as e:
+                                self.logger.logger.warning(f"Preprocessing failed for {symbol}: {e}")
+                                # Try with just transform if fit fails
+                                try:
+                                    features_scaled = self.preprocessor.transform(features)
+                                except Exception as e2:
+                                    self.logger.logger.error(f"Transform also failed for {symbol}: {e2}")
+                                    continue
                             
                             # Create sequence
                             sequence = features_scaled[-sequence_length:].reshape(1, sequence_length, -1)
                             
+                            # Validate sequence
+                            if np.isnan(sequence).any() or np.isinf(sequence).any():
+                                self.logger.logger.warning(f"Invalid values in sequence for {symbol}, skipping GRU prediction")
+                                continue
+                            
                             # Predict
-                            gru_pred = self.models['gru'].predict(sequence)[0]
-                            predictions.append(('gru', gru_pred))
+                            try:
+                                gru_pred = self.models['gru'].predict(sequence)[0]
+                                # Validate prediction
+                                if np.isnan(gru_pred) or np.isinf(gru_pred):
+                                    self.logger.logger.warning(f"Invalid prediction from GRU for {symbol}, skipping")
+                                    continue
+                                predictions.append(('gru', gru_pred))
+                            except Exception as e:
+                                self.logger.logger.debug(f"GRU prediction failed for {symbol}: {e}")
                     except Exception as e:
                         self.logger.logger.debug(f"GRU prediction failed for {symbol}: {e}")
                 
                 # LightGBM prediction
                 if 'lightgbm' in self.models:
                     try:
+                        # Validate input features
+                        if np.isnan(latest_features).any() or np.isinf(latest_features).any():
+                            self.logger.logger.warning(f"Invalid values in features for {symbol}, skipping LightGBM prediction")
+                            continue
+                        
                         lgbm_pred = self.models['lightgbm'].predict(latest_features)[0]
+                        
+                        # Validate prediction
+                        if np.isnan(lgbm_pred) or np.isinf(lgbm_pred):
+                            self.logger.logger.warning(f"Invalid prediction from LightGBM for {symbol}, skipping")
+                            continue
+                            
                         predictions.append(('lightgbm', lgbm_pred))
                     except Exception as e:
                         self.logger.logger.debug(f"LightGBM prediction failed for {symbol}: {e}")
@@ -213,6 +498,11 @@ class PaperTrader:
                         # Use the latest features as observation
                         observation = latest_features[-1:]  # Get last row as observation
                         if observation.shape[1] > 0:  # Ensure we have features
+                            # Validate observation
+                            if np.isnan(observation).any() or np.isinf(observation).any():
+                                self.logger.logger.warning(f"Invalid values in observation for {symbol}, skipping PPO prediction")
+                                continue
+                            
                             ppo_action, _ = self.models['ppo'].predict(observation, deterministic=True)
                             # Convert action to prediction value
                             # Action 0 = Hold, 1 = Buy, 2 = Sell
@@ -222,6 +512,12 @@ class PaperTrader:
                                 ppo_pred = -0.002  # Strong sell signal
                             else:
                                 ppo_pred = 0.0  # Hold signal
+                            
+                            # Validate prediction
+                            if np.isnan(ppo_pred) or np.isinf(ppo_pred):
+                                self.logger.logger.warning(f"Invalid prediction from PPO for {symbol}, skipping")
+                                continue
+                                
                             predictions.append(('ppo', ppo_pred))
                     except Exception as e:
                         self.logger.logger.debug(f"PPO prediction failed for {symbol}: {e}")
@@ -229,16 +525,28 @@ class PaperTrader:
                 # Convert predictions to signals
                 if predictions:
                     # Simple ensemble: average predictions
-                    avg_prediction = np.mean([pred for _, pred in predictions])
-                    
-                    # Convert to signal
-                    threshold = 0.001  # 0.1% threshold
-                    if avg_prediction > threshold:
-                        signal = 1  # Buy
-                    elif avg_prediction < -threshold:
-                        signal = -1  # Sell
-                    else:
-                        signal = 0  # Hold
+                    try:
+                        prediction_values = [pred for _, pred in predictions]
+                        avg_prediction = np.mean(prediction_values)
+                        
+                        # Validate average prediction
+                        if np.isnan(avg_prediction) or np.isinf(avg_prediction):
+                            self.logger.logger.warning(f"Invalid average prediction for {symbol}: {avg_prediction}")
+                            signal = 0  # Hold
+                        else:
+                            # Convert to signal
+                            threshold = 0.001  # 0.1% threshold
+                            if avg_prediction > threshold:
+                                signal = 1  # Buy
+                            elif avg_prediction < -threshold:
+                                signal = -1  # Sell
+                            else:
+                                signal = 0  # Hold
+                    except Exception as e:
+                        self.logger.logger.warning(f"Error calculating average prediction for {symbol}: {e}")
+                        signal = 0  # Hold on error
+                else:
+                    signal = 0  # Hold if no predictions
                 
                 signals[symbol] = signal
                 
@@ -247,11 +555,14 @@ class PaperTrader:
                     self.logger.logger.info(f"Signal for {symbol}: {signal} (prediction: {avg_prediction:.6f})")
                 elif not predictions:
                     self.logger.logger.debug(f"No predictions available for {symbol}")
+                else:
+                    self.logger.logger.debug(f"Hold signal for {symbol}")
             
             except Exception as e:
                 self.logger.logger.error(f"Error generating signal for {symbol}: {e}")
                 signals[symbol] = 0
         
+        self.logger.logger.debug(f"Generated signals for {len(signals)} symbols")
         return signals
     
     def execute_trades(self, signals: dict):
@@ -267,28 +578,43 @@ class PaperTrader:
             
             try:
                 current_price = self.last_prices.get(symbol)
-                if not current_price:
+                if not current_price or current_price <= 0:
+                    self.logger.logger.warning(f"Invalid price for {symbol}: {current_price}")
                     continue
                 
                 current_position = self.positions.get(symbol, 0.0)
                 
-                # Calculate target position
-                if signal == 1:  # Buy
-                    target_position = self.max_position_size * self.portfolio_value / current_price
-                elif signal == -1:  # Sell
-                    target_position = -self.max_position_size * self.portfolio_value / current_price
-                else:
-                    target_position = 0.0
+                # Calculate target position based on signal strength
+                # Signal values are typically between -1 and 1
+                position_ratio = abs(signal) * self.max_position_size
+                target_position_value = self.portfolio_value * position_ratio
+                target_position = target_position_value / current_price if current_price > 0 else 0.0
+                
+                # Apply direction based on signal
+                if signal < 0:  # Sell/Short
+                    target_position = -target_position
                 
                 # Calculate trade size
                 trade_size = target_position - current_position
                 
-                if abs(trade_size) < 0.001:  # Minimum trade size
+                # Check minimum trade size
+                min_trade_size = 0.0001  # Minimum trade size for most crypto exchanges
+                if abs(trade_size) < min_trade_size:
                     continue
                 
                 # Execute trade
                 trade_value = abs(trade_size) * current_price
                 fee = trade_value * self.transaction_fee
+                
+                # Check if we have enough funds for the trade
+                if trade_size > 0 and (trade_value + fee) > self.portfolio_value:
+                    # Not enough funds, adjust trade size
+                    available_funds = self.portfolio_value / (current_price * (1 + self.transaction_fee))
+                    trade_size = min(trade_size, available_funds)
+                    if abs(trade_size) < min_trade_size:
+                        continue
+                    trade_value = abs(trade_size) * current_price
+                    fee = trade_value * self.transaction_fee
                 
                 # Update portfolio
                 if trade_size > 0:  # Buying
@@ -327,11 +653,30 @@ class PaperTrader:
         """Calculate current portfolio value including positions."""
         total_value = self.portfolio_value
         
+        # Validate that portfolio_value is not negative
+        if total_value < 0:
+            self.logger.logger.warning(f"Negative portfolio value: {total_value}")
+            total_value = 0.0
+        
         for symbol, quantity in self.positions.items():
             if abs(quantity) > 1e-6:  # Non-zero position
                 current_price = self.last_prices.get(symbol, 0)
-                total_value += quantity * current_price
+                # Validate price
+                if current_price > 0:
+                    position_value = quantity * current_price
+                    # Validate position value
+                    if not (np.isnan(position_value) or np.isinf(position_value)):
+                        total_value += position_value
+                    else:
+                        self.logger.logger.warning(f"Invalid position value for {symbol}: {position_value}")
+                else:
+                    self.logger.logger.warning(f"Invalid price for {symbol}: {current_price}")
         
+        # Ensure total value is not negative
+        if total_value < 0:
+            self.logger.logger.warning(f"Calculated negative portfolio value: {total_value}, setting to 0")
+            total_value = 0.0
+            
         return total_value
     
     async def send_daily_report(self):

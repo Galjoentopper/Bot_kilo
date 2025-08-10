@@ -127,6 +127,9 @@ class FeatureEngine:
             logger.error(f"Still have {inf_count} infinite values after cleaning")
             features_df = features_df.replace([np.inf, -np.inf], [1e6, -1e6])  # Replace with large but finite values
         
+        # Ensure all values are finite
+        features_df = features_df.replace([np.inf, -np.inf], np.nan).fillna(0)
+        
         # Log feature generation summary
         original_cols = len(df.columns)
         new_cols = len(features_df.columns)
@@ -143,9 +146,9 @@ class FeatureEngine:
         df['ohlc_avg'] = (df['open'] + df['high'] + df['low'] + df['close']) / 4
         
         # Price ranges
-        df['price_range'] = df['high'] - df['low']
+        df.loc[:, 'price_range'] = df['high'] - df['low']
         # Avoid division by zero
-        df['price_range_pct'] = df['price_range'] / (df['close'] + 1e-10)
+        df.loc[:, 'price_range_pct'] = df['price_range'] / (df['close'] + 1e-10)
         
         # Body and shadow features
         df['body'] = abs(df['close'] - df['open'])

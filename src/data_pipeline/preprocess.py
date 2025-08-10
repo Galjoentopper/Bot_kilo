@@ -143,6 +143,10 @@ class DataPreprocessor:
             logger.warning(f"{inf_count} infinite values found after scaling, clipping to finite range")
             X_scaled = np.clip(X_scaled, -1e6, 1e6)  # Clip extreme values
         
+        # Ensure all values are finite
+        X_scaled = np.where(np.isnan(X_scaled), 0.0, X_scaled)
+        X_scaled = np.where(np.isinf(X_scaled), np.clip(X_scaled, -1e6, 1e6), X_scaled)
+        
         return X_scaled
     
     def fit_transform(self, X: Union[pd.DataFrame, np.ndarray], feature_names: Optional[List[str]] = None) -> np.ndarray:
