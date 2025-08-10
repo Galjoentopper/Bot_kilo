@@ -1,5 +1,5 @@
 {
-  "timestamp": "2025-08-10T12:34:18.651913",
+  "timestamp": "2025-08-10T12:39:27.356609",
   "models_evaluated": [
     "gru",
     "lightgbm",
@@ -14,7 +14,43 @@
   ],
   "accuracy_results": {
     "gru": {},
-    "lightgbm": {},
+    "lightgbm": {
+      "BTCEUR": {
+        "mse": 1.6207403909794847e-06,
+        "mae": 0.000934305542399032,
+        "rmse": 0.0012730830259568638,
+        "r2": -0.0003707473765390823,
+        "directional_accuracy": 0.5017421602787456
+      },
+      "SOLEUR": {
+        "mse": 1.1580903271051894e-05,
+        "mae": 0.0025680250309764226,
+        "rmse": 0.0034030726220655202,
+        "r2": -0.0030189057301537314,
+        "directional_accuracy": 0.4878048780487805
+      },
+      "ADAEUR": {
+        "mse": 1.4929405907451874e-05,
+        "mae": 0.002994608055200201,
+        "rmse": 0.0038638589399008698,
+        "r2": -0.002443147958468117,
+        "directional_accuracy": 0.4634146341463415
+      },
+      "XRPEUR": {
+        "mse": 1.1850482987803496e-05,
+        "mae": 0.0027238632067197685,
+        "rmse": 0.003442453048017285,
+        "r2": -0.002134628539450567,
+        "directional_accuracy": 0.44947735191637633
+      },
+      "ETHEUR": {
+        "mse": 8.361829419660015e-06,
+        "mae": 0.00212637264896182,
+        "rmse": 0.002891682800664695,
+        "r2": -0.0044276183306477535,
+        "directional_accuracy": 0.4843205574912892
+      }
+    },
     "ppo": {
       "BTCEUR": {
         "note": "PPO evaluated via trading performance"
@@ -35,47 +71,88 @@
   },
   "speed_results": {
     "gru": {},
-    "lightgbm": {},
-    "ppo": {
+    "lightgbm": {
       "BTCEUR": {
-        "mean_latency_ms": 1.8204951286315918,
-        "median_latency_ms": 0.9996891021728516,
-        "p95_latency_ms": 4.047536849975583,
-        "p99_latency_ms": 16.019289493560805,
-        "throughput_per_sec": 549.3011127976312,
-        "std_latency_ms": 2.6680884300209735
+        "mean_latency_ms": 2.308480739593506,
+        "median_latency_ms": 1.9989013671875,
+        "p95_latency_ms": 2.9988646507263184,
+        "p99_latency_ms": 5.076947212219279,
+        "throughput_per_sec": 433.185333907567,
+        "std_latency_ms": 1.1965941749745903
       },
       "SOLEUR": {
-        "mean_latency_ms": 2.552666664123535,
-        "median_latency_ms": 0.9996891021728516,
-        "p95_latency_ms": 6.047785282135007,
-        "p99_latency_ms": 37.260112762451314,
-        "throughput_per_sec": 391.7471928687378,
-        "std_latency_ms": 7.614341761258864
+        "mean_latency_ms": 3.8236212730407715,
+        "median_latency_ms": 1.9992589950561523,
+        "p95_latency_ms": 6.208515167236323,
+        "p99_latency_ms": 37.08763122558614,
+        "throughput_per_sec": 261.53217816071526,
+        "std_latency_ms": 8.157288862537428
       },
       "ADAEUR": {
-        "mean_latency_ms": 0.8594775199890137,
-        "median_latency_ms": 0.9990930557250977,
-        "p95_latency_ms": 1.9987106323242188,
-        "p99_latency_ms": 2.0119452476501514,
-        "throughput_per_sec": 1163.4975630459567,
-        "std_latency_ms": 0.5999256046854831
+        "mean_latency_ms": 2.2596120834350586,
+        "median_latency_ms": 1.9989013671875,
+        "p95_latency_ms": 2.9993057250976562,
+        "p99_latency_ms": 3.0197405815124614,
+        "throughput_per_sec": 442.5538380374571,
+        "std_latency_ms": 0.5017445743413051
       },
       "XRPEUR": {
-        "mean_latency_ms": 1.1893296241760254,
-        "median_latency_ms": 0.99945068359375,
-        "p95_latency_ms": 1.9996404647827148,
-        "p99_latency_ms": 5.067489147186315,
-        "throughput_per_sec": 840.8097971097003,
-        "std_latency_ms": 1.2621317836259973
+        "mean_latency_ms": 3.6737418174743652,
+        "median_latency_ms": 2.9973983764648438,
+        "p95_latency_ms": 6.047201156616208,
+        "p99_latency_ms": 22.377622127533158,
+        "throughput_per_sec": 272.2020353317814,
+        "std_latency_ms": 6.204022230078857
       },
       "ETHEUR": {
-        "mean_latency_ms": 1.2607526779174805,
+        "mean_latency_ms": 3.961515426635742,
+        "median_latency_ms": 1.9991397857666016,
+        "p95_latency_ms": 6.246209144592271,
+        "p99_latency_ms": 22.77141809463541,
+        "throughput_per_sec": 252.4286522466568,
+        "std_latency_ms": 10.270296931380921
+      }
+    },
+    "ppo": {
+      "BTCEUR": {
+        "mean_latency_ms": 1.0993671417236328,
+        "median_latency_ms": 0.99945068359375,
+        "p95_latency_ms": 2.0003437995910645,
+        "p99_latency_ms": 2.0212340354919536,
+        "throughput_per_sec": 909.6142335418167,
+        "std_latency_ms": 0.49975161001092244
+      },
+      "SOLEUR": {
+        "mean_latency_ms": 0.7495689392089844,
         "median_latency_ms": 0.9992122650146484,
-        "p95_latency_ms": 1.9982218742370605,
-        "p99_latency_ms": 5.22710323333752,
-        "throughput_per_sec": 793.1769787328999,
-        "std_latency_ms": 2.749947532390369
+        "p95_latency_ms": 1.0013580322265625,
+        "p99_latency_ms": 1.9986724853515625,
+        "throughput_per_sec": 1334.1001043283545,
+        "std_latency_ms": 0.4767082715846789
+      },
+      "ADAEUR": {
+        "mean_latency_ms": 0.6695795059204102,
+        "median_latency_ms": 0.9989738464355469,
+        "p95_latency_ms": 1.0009169578552246,
+        "p99_latency_ms": 1.99723482131958,
+        "throughput_per_sec": 1493.4746227416126,
+        "std_latency_ms": 0.5106046947594992
+      },
+      "XRPEUR": {
+        "mean_latency_ms": 0.7295441627502441,
+        "median_latency_ms": 0.9992122650146484,
+        "p95_latency_ms": 1.0006427764892578,
+        "p99_latency_ms": 1.002798080444336,
+        "throughput_per_sec": 1370.7189380149218,
+        "std_latency_ms": 0.44368306272806646
+      },
+      "ETHEUR": {
+        "mean_latency_ms": 0.6895661354064941,
+        "median_latency_ms": 0.9989738464355469,
+        "p95_latency_ms": 1.0004043579101562,
+        "p99_latency_ms": 1.0023164749145508,
+        "throughput_per_sec": 1450.1872244792116,
+        "std_latency_ms": 0.4622029448392744
       }
     }
   },
@@ -215,132 +292,212 @@
     "lightgbm": {
       "BTCEUR": {
         "high_volatility": {
-          "num_predictions": 0,
-          "num_errors": 10,
-          "error_rate": 1.0,
-          "stability_score": 0.0
+          "num_predictions": 10,
+          "num_errors": 0,
+          "error_rate": 0.0,
+          "prediction_mean": 2.4122794499510636e-05,
+          "prediction_std": 1.784432913035402e-05,
+          "has_nan": false,
+          "has_inf": false,
+          "stability_score": 1.0
         },
         "low_volatility": {
-          "num_predictions": 0,
-          "num_errors": 10,
-          "error_rate": 1.0,
-          "stability_score": 0.0
+          "num_predictions": 10,
+          "num_errors": 0,
+          "error_rate": 0.0,
+          "prediction_mean": 3.976188242543403e-05,
+          "prediction_std": 4.866689588540206e-05,
+          "has_nan": false,
+          "has_inf": false,
+          "stability_score": 1.0
         },
         "extreme_values": {
-          "num_predictions": 0,
-          "num_errors": 10,
-          "error_rate": 1.0,
-          "stability_score": 0.0
+          "num_predictions": 10,
+          "num_errors": 0,
+          "error_rate": 0.0,
+          "prediction_mean": 1.9969730558931145e-05,
+          "prediction_std": 4.526039451557745e-06,
+          "has_nan": false,
+          "has_inf": false,
+          "stability_score": 1.0
         },
         "missing_data": {
-          "num_predictions": 0,
-          "num_errors": 10,
-          "error_rate": 1.0,
-          "stability_score": 0.0
+          "num_predictions": 10,
+          "num_errors": 0,
+          "error_rate": 0.0,
+          "prediction_mean": 4.62094406709943e-05,
+          "prediction_std": 8.123526850314367e-05,
+          "has_nan": false,
+          "has_inf": false,
+          "stability_score": 1.0
         }
       },
       "SOLEUR": {
         "high_volatility": {
-          "num_predictions": 0,
-          "num_errors": 10,
-          "error_rate": 1.0,
-          "stability_score": 0.0
+          "num_predictions": 10,
+          "num_errors": 0,
+          "error_rate": 0.0,
+          "prediction_mean": 1.205290382110686e-05,
+          "prediction_std": 2.611249520468789e-05,
+          "has_nan": false,
+          "has_inf": false,
+          "stability_score": 1.0
         },
         "low_volatility": {
-          "num_predictions": 0,
-          "num_errors": 10,
-          "error_rate": 1.0,
-          "stability_score": 0.0
+          "num_predictions": 10,
+          "num_errors": 0,
+          "error_rate": 0.0,
+          "prediction_mean": 1.4852228152899404e-05,
+          "prediction_std": 2.237089749287528e-05,
+          "has_nan": false,
+          "has_inf": false,
+          "stability_score": 1.0
         },
         "extreme_values": {
-          "num_predictions": 0,
-          "num_errors": 10,
-          "error_rate": 1.0,
-          "stability_score": 0.0
+          "num_predictions": 10,
+          "num_errors": 0,
+          "error_rate": 0.0,
+          "prediction_mean": 0.00017140598044208723,
+          "prediction_std": 4.17720392572495e-05,
+          "has_nan": false,
+          "has_inf": false,
+          "stability_score": 1.0
         },
         "missing_data": {
-          "num_predictions": 0,
-          "num_errors": 10,
-          "error_rate": 1.0,
-          "stability_score": 0.0
+          "num_predictions": 10,
+          "num_errors": 0,
+          "error_rate": 0.0,
+          "prediction_mean": 0.00021376481246926124,
+          "prediction_std": 0.00012020228830796901,
+          "has_nan": false,
+          "has_inf": false,
+          "stability_score": 1.0
         }
       },
       "ADAEUR": {
         "high_volatility": {
-          "num_predictions": 0,
-          "num_errors": 10,
-          "error_rate": 1.0,
-          "stability_score": 0.0
+          "num_predictions": 10,
+          "num_errors": 0,
+          "error_rate": 0.0,
+          "prediction_mean": 3.203728633181028e-05,
+          "prediction_std": 6.567528775235298e-05,
+          "has_nan": false,
+          "has_inf": false,
+          "stability_score": 1.0
         },
         "low_volatility": {
-          "num_predictions": 0,
-          "num_errors": 10,
-          "error_rate": 1.0,
-          "stability_score": 0.0
+          "num_predictions": 10,
+          "num_errors": 0,
+          "error_rate": 0.0,
+          "prediction_mean": 2.8370642580757973e-05,
+          "prediction_std": 3.313814837401273e-05,
+          "has_nan": false,
+          "has_inf": false,
+          "stability_score": 1.0
         },
         "extreme_values": {
-          "num_predictions": 0,
-          "num_errors": 10,
-          "error_rate": 1.0,
-          "stability_score": 0.0
+          "num_predictions": 10,
+          "num_errors": 0,
+          "error_rate": 0.0,
+          "prediction_mean": 7.986999700406565e-05,
+          "prediction_std": 3.487239493160504e-05,
+          "has_nan": false,
+          "has_inf": false,
+          "stability_score": 1.0
         },
         "missing_data": {
-          "num_predictions": 0,
-          "num_errors": 10,
-          "error_rate": 1.0,
-          "stability_score": 0.0
+          "num_predictions": 10,
+          "num_errors": 0,
+          "error_rate": 0.0,
+          "prediction_mean": 9.313077722296845e-05,
+          "prediction_std": 4.5772305626060106e-05,
+          "has_nan": false,
+          "has_inf": false,
+          "stability_score": 1.0
         }
       },
       "XRPEUR": {
         "high_volatility": {
-          "num_predictions": 0,
-          "num_errors": 10,
-          "error_rate": 1.0,
-          "stability_score": 0.0
+          "num_predictions": 10,
+          "num_errors": 0,
+          "error_rate": 0.0,
+          "prediction_mean": 4.437670365730892e-05,
+          "prediction_std": 4.004530295837727e-05,
+          "has_nan": false,
+          "has_inf": false,
+          "stability_score": 1.0
         },
         "low_volatility": {
-          "num_predictions": 0,
-          "num_errors": 10,
-          "error_rate": 1.0,
-          "stability_score": 0.0
+          "num_predictions": 10,
+          "num_errors": 0,
+          "error_rate": 0.0,
+          "prediction_mean": 2.3367338300764042e-05,
+          "prediction_std": 2.6278567892836223e-05,
+          "has_nan": false,
+          "has_inf": false,
+          "stability_score": 1.0
         },
         "extreme_values": {
-          "num_predictions": 0,
-          "num_errors": 10,
-          "error_rate": 1.0,
-          "stability_score": 0.0
+          "num_predictions": 10,
+          "num_errors": 0,
+          "error_rate": 0.0,
+          "prediction_mean": 6.25013594906727e-05,
+          "prediction_std": 3.543640269537135e-05,
+          "has_nan": false,
+          "has_inf": false,
+          "stability_score": 1.0
         },
         "missing_data": {
-          "num_predictions": 0,
-          "num_errors": 10,
-          "error_rate": 1.0,
-          "stability_score": 0.0
+          "num_predictions": 10,
+          "num_errors": 0,
+          "error_rate": 0.0,
+          "prediction_mean": 0.00011810078470889706,
+          "prediction_std": 8.189703748894945e-05,
+          "has_nan": false,
+          "has_inf": false,
+          "stability_score": 1.0
         }
       },
       "ETHEUR": {
         "high_volatility": {
-          "num_predictions": 0,
-          "num_errors": 10,
-          "error_rate": 1.0,
-          "stability_score": 0.0
+          "num_predictions": 10,
+          "num_errors": 0,
+          "error_rate": 0.0,
+          "prediction_mean": 1.0481435055894053e-05,
+          "prediction_std": 3.633580403479054e-05,
+          "has_nan": false,
+          "has_inf": false,
+          "stability_score": 1.0
         },
         "low_volatility": {
-          "num_predictions": 0,
-          "num_errors": 10,
-          "error_rate": 1.0,
-          "stability_score": 0.0
+          "num_predictions": 10,
+          "num_errors": 0,
+          "error_rate": 0.0,
+          "prediction_mean": 3.245129141294963e-05,
+          "prediction_std": 3.3870156332947326e-05,
+          "has_nan": false,
+          "has_inf": false,
+          "stability_score": 1.0
         },
         "extreme_values": {
-          "num_predictions": 0,
-          "num_errors": 10,
-          "error_rate": 1.0,
-          "stability_score": 0.0
+          "num_predictions": 10,
+          "num_errors": 0,
+          "error_rate": 0.0,
+          "prediction_mean": 3.7186968637368306e-05,
+          "prediction_std": 3.933208359356284e-05,
+          "has_nan": false,
+          "has_inf": false,
+          "stability_score": 1.0
         },
         "missing_data": {
-          "num_predictions": 0,
-          "num_errors": 10,
-          "error_rate": 1.0,
-          "stability_score": 0.0
+          "num_predictions": 10,
+          "num_errors": 0,
+          "error_rate": 0.0,
+          "prediction_mean": 0.0001508956150564132,
+          "prediction_std": 0.00012360244098442606,
+          "has_nan": false,
+          "has_inf": false,
+          "stability_score": 1.0
         }
       }
     },
@@ -350,8 +507,8 @@
           "num_predictions": 10,
           "num_errors": 0,
           "error_rate": 0.0,
-          "prediction_mean": 0.14747487008571625,
-          "prediction_std": 0.21419203281402588,
+          "prediction_mean": 0.2317698746919632,
+          "prediction_std": 0.21319922804832458,
           "has_nan": false,
           "has_inf": false,
           "stability_score": 1.0
@@ -360,8 +517,8 @@
           "num_predictions": 10,
           "num_errors": 0,
           "error_rate": 0.0,
-          "prediction_mean": -0.026567528024315834,
-          "prediction_std": 0.26874783635139465,
+          "prediction_mean": 0.041785310953855515,
+          "prediction_std": 0.2627211809158325,
           "has_nan": false,
           "has_inf": false,
           "stability_score": 1.0
@@ -370,8 +527,8 @@
           "num_predictions": 10,
           "num_errors": 0,
           "error_rate": 0.0,
-          "prediction_mean": 0.11404869705438614,
-          "prediction_std": 0.2581166923046112,
+          "prediction_mean": 0.12622645497322083,
+          "prediction_std": 0.30674752593040466,
           "has_nan": false,
           "has_inf": false,
           "stability_score": 1.0
@@ -380,8 +537,8 @@
           "num_predictions": 10,
           "num_errors": 0,
           "error_rate": 0.0,
-          "prediction_mean": 0.11736992746591568,
-          "prediction_std": 0.291044145822525,
+          "prediction_mean": 0.1415804922580719,
+          "prediction_std": 0.31642699241638184,
           "has_nan": false,
           "has_inf": false,
           "stability_score": 1.0
@@ -392,8 +549,8 @@
           "num_predictions": 10,
           "num_errors": 0,
           "error_rate": 0.0,
-          "prediction_mean": 0.18051330745220184,
-          "prediction_std": 0.27440544962882996,
+          "prediction_mean": 0.010564571246504784,
+          "prediction_std": 0.2452632486820221,
           "has_nan": false,
           "has_inf": false,
           "stability_score": 1.0
@@ -402,8 +559,8 @@
           "num_predictions": 10,
           "num_errors": 0,
           "error_rate": 0.0,
-          "prediction_mean": 0.08678601682186127,
-          "prediction_std": 0.31565800309181213,
+          "prediction_mean": 0.09162881970405579,
+          "prediction_std": 0.24441523849964142,
           "has_nan": false,
           "has_inf": false,
           "stability_score": 1.0
@@ -412,8 +569,8 @@
           "num_predictions": 10,
           "num_errors": 0,
           "error_rate": 0.0,
-          "prediction_mean": 0.11780808120965958,
-          "prediction_std": 0.2088526487350464,
+          "prediction_mean": 0.15132668614387512,
+          "prediction_std": 0.31036531925201416,
           "has_nan": false,
           "has_inf": false,
           "stability_score": 1.0
@@ -422,8 +579,8 @@
           "num_predictions": 10,
           "num_errors": 0,
           "error_rate": 0.0,
-          "prediction_mean": 0.1213231086730957,
-          "prediction_std": 0.21759183704853058,
+          "prediction_mean": 0.12543730437755585,
+          "prediction_std": 0.2209365963935852,
           "has_nan": false,
           "has_inf": false,
           "stability_score": 1.0
@@ -434,8 +591,8 @@
           "num_predictions": 10,
           "num_errors": 0,
           "error_rate": 0.0,
-          "prediction_mean": 0.2596948742866516,
-          "prediction_std": 0.20223714411258698,
+          "prediction_mean": 0.12137937545776367,
+          "prediction_std": 0.2689669132232666,
           "has_nan": false,
           "has_inf": false,
           "stability_score": 1.0
@@ -444,8 +601,8 @@
           "num_predictions": 10,
           "num_errors": 0,
           "error_rate": 0.0,
-          "prediction_mean": 0.14932093024253845,
-          "prediction_std": 0.25501763820648193,
+          "prediction_mean": 0.2352467030286789,
+          "prediction_std": 0.2488911747932434,
           "has_nan": false,
           "has_inf": false,
           "stability_score": 1.0
@@ -454,8 +611,8 @@
           "num_predictions": 10,
           "num_errors": 0,
           "error_rate": 0.0,
-          "prediction_mean": 0.07549922168254852,
-          "prediction_std": 0.25537964701652527,
+          "prediction_mean": 0.1044628843665123,
+          "prediction_std": 0.2285051792860031,
           "has_nan": false,
           "has_inf": false,
           "stability_score": 1.0
@@ -464,8 +621,8 @@
           "num_predictions": 10,
           "num_errors": 0,
           "error_rate": 0.0,
-          "prediction_mean": 0.008572694845497608,
-          "prediction_std": 0.24779313802719116,
+          "prediction_mean": 0.13836674392223358,
+          "prediction_std": 0.3490592837333679,
           "has_nan": false,
           "has_inf": false,
           "stability_score": 1.0
@@ -476,8 +633,8 @@
           "num_predictions": 10,
           "num_errors": 0,
           "error_rate": 0.0,
-          "prediction_mean": 0.04963550716638565,
-          "prediction_std": 0.21936948597431183,
+          "prediction_mean": 0.12238302081823349,
+          "prediction_std": 0.3217104971408844,
           "has_nan": false,
           "has_inf": false,
           "stability_score": 1.0
@@ -486,8 +643,8 @@
           "num_predictions": 10,
           "num_errors": 0,
           "error_rate": 0.0,
-          "prediction_mean": 0.05749380588531494,
-          "prediction_std": 0.20351243019104004,
+          "prediction_mean": 0.0593593493103981,
+          "prediction_std": 0.2206176221370697,
           "has_nan": false,
           "has_inf": false,
           "stability_score": 1.0
@@ -496,8 +653,8 @@
           "num_predictions": 10,
           "num_errors": 0,
           "error_rate": 0.0,
-          "prediction_mean": 0.12641392648220062,
-          "prediction_std": 0.27294743061065674,
+          "prediction_mean": 0.16648253798484802,
+          "prediction_std": 0.325173944234848,
           "has_nan": false,
           "has_inf": false,
           "stability_score": 1.0
@@ -506,8 +663,8 @@
           "num_predictions": 10,
           "num_errors": 0,
           "error_rate": 0.0,
-          "prediction_mean": 0.0787985697388649,
-          "prediction_std": 0.1917290836572647,
+          "prediction_mean": 0.09753074496984482,
+          "prediction_std": 0.2750053107738495,
           "has_nan": false,
           "has_inf": false,
           "stability_score": 1.0
@@ -518,8 +675,8 @@
           "num_predictions": 10,
           "num_errors": 0,
           "error_rate": 0.0,
-          "prediction_mean": 0.19372686743736267,
-          "prediction_std": 0.22024476528167725,
+          "prediction_mean": 0.11840863525867462,
+          "prediction_std": 0.19940204918384552,
           "has_nan": false,
           "has_inf": false,
           "stability_score": 1.0
@@ -528,8 +685,8 @@
           "num_predictions": 10,
           "num_errors": 0,
           "error_rate": 0.0,
-          "prediction_mean": 0.02991749718785286,
-          "prediction_std": 0.23137111961841583,
+          "prediction_mean": 0.14500418305397034,
+          "prediction_std": 0.2275216430425644,
           "has_nan": false,
           "has_inf": false,
           "stability_score": 1.0
@@ -538,8 +695,8 @@
           "num_predictions": 10,
           "num_errors": 0,
           "error_rate": 0.0,
-          "prediction_mean": 0.01606161519885063,
-          "prediction_std": 0.26129066944122314,
+          "prediction_mean": 0.1562829464673996,
+          "prediction_std": 0.2772539556026459,
           "has_nan": false,
           "has_inf": false,
           "stability_score": 1.0
@@ -548,8 +705,8 @@
           "num_predictions": 10,
           "num_errors": 0,
           "error_rate": 0.0,
-          "prediction_mean": 0.13955841958522797,
-          "prediction_std": 0.24083493649959564,
+          "prediction_mean": 0.15161669254302979,
+          "prediction_std": 0.2790183126926422,
           "has_nan": false,
           "has_inf": false,
           "stability_score": 1.0
@@ -571,5 +728,5 @@
       "overall_improvement": 0.0
     }
   },
-  "report": "================================================================================\nCOMPREHENSIVE MODEL RE-EVALUATION REPORT\n================================================================================\nGenerated: 2025-08-10 12:34:18\n\nEXECUTIVE SUMMARY\n----------------------------------------\nModels Evaluated: gru, lightgbm, ppo\nSymbols Tested: BTCEUR, SOLEUR, ADAEUR, XRPEUR, ETHEUR\n\nMODEL ACCURACY EVALUATION\n----------------------------------------\n\nGRU Model:\n\nLIGHTGBM Model:\n\nPPO Model:\n  BTCEUR:\n    note: PPO evaluated via trading performance\n  SOLEUR:\n    note: PPO evaluated via trading performance\n  ADAEUR:\n    note: PPO evaluated via trading performance\n  XRPEUR:\n    note: PPO evaluated via trading performance\n  ETHEUR:\n    note: PPO evaluated via trading performance\n\n\nPROCESSING SPEED BENCHMARKS\n----------------------------------------\n\nGRU Model:\n\nLIGHTGBM Model:\n\nPPO Model:\n  BTCEUR:\n    mean_latency_ms: 1.82\n    median_latency_ms: 1.00\n    p95_latency_ms: 4.05\n    p99_latency_ms: 16.02\n    throughput_per_sec: 549.30\n    std_latency_ms: 2.67\n  SOLEUR:\n    mean_latency_ms: 2.55\n    median_latency_ms: 1.00\n    p95_latency_ms: 6.05\n    p99_latency_ms: 37.26\n    throughput_per_sec: 391.75\n    std_latency_ms: 7.61\n  ADAEUR:\n    mean_latency_ms: 0.86\n    median_latency_ms: 1.00\n    p95_latency_ms: 2.00\n    p99_latency_ms: 2.01\n    throughput_per_sec: 1163.50\n    std_latency_ms: 0.60\n  XRPEUR:\n    mean_latency_ms: 1.19\n    median_latency_ms: 1.00\n    p95_latency_ms: 2.00\n    p99_latency_ms: 5.07\n    throughput_per_sec: 840.81\n    std_latency_ms: 1.26\n  ETHEUR:\n    mean_latency_ms: 1.26\n    median_latency_ms: 1.00\n    p95_latency_ms: 2.00\n    p99_latency_ms: 5.23\n    throughput_per_sec: 793.18\n    std_latency_ms: 2.75\n\n\nEDGE CASE TESTING RESULTS\n----------------------------------------\n\nGRU Model:\n  BTCEUR:\n    high_volatility: Stability Score 0.000\n    low_volatility: Stability Score 0.000\n    extreme_values: Stability Score 0.000\n    missing_data: Stability Score 0.000\n  SOLEUR:\n    high_volatility: Stability Score 0.000\n    low_volatility: Stability Score 0.000\n    extreme_values: Stability Score 0.000\n    missing_data: Stability Score 0.000\n  ADAEUR:\n    high_volatility: Stability Score 0.000\n    low_volatility: Stability Score 0.000\n    extreme_values: Stability Score 0.000\n    missing_data: Stability Score 0.000\n  XRPEUR:\n    high_volatility: Stability Score 0.000\n    low_volatility: Stability Score 0.000\n    extreme_values: Stability Score 0.000\n    missing_data: Stability Score 0.000\n  ETHEUR:\n    high_volatility: Stability Score 0.000\n    low_volatility: Stability Score 0.000\n    extreme_values: Stability Score 0.000\n    missing_data: Stability Score 0.000\n\nLIGHTGBM Model:\n  BTCEUR:\n    high_volatility: Stability Score 0.000\n    low_volatility: Stability Score 0.000\n    extreme_values: Stability Score 0.000\n    missing_data: Stability Score 0.000\n  SOLEUR:\n    high_volatility: Stability Score 0.000\n    low_volatility: Stability Score 0.000\n    extreme_values: Stability Score 0.000\n    missing_data: Stability Score 0.000\n  ADAEUR:\n    high_volatility: Stability Score 0.000\n    low_volatility: Stability Score 0.000\n    extreme_values: Stability Score 0.000\n    missing_data: Stability Score 0.000\n  XRPEUR:\n    high_volatility: Stability Score 0.000\n    low_volatility: Stability Score 0.000\n    extreme_values: Stability Score 0.000\n    missing_data: Stability Score 0.000\n  ETHEUR:\n    high_volatility: Stability Score 0.000\n    low_volatility: Stability Score 0.000\n    extreme_values: Stability Score 0.000\n    missing_data: Stability Score 0.000\n\nPPO Model:\n  BTCEUR:\n    high_volatility: Stability Score 1.000\n    low_volatility: Stability Score 1.000\n    extreme_values: Stability Score 1.000\n    missing_data: Stability Score 1.000\n  SOLEUR:\n    high_volatility: Stability Score 1.000\n    low_volatility: Stability Score 1.000\n    extreme_values: Stability Score 1.000\n    missing_data: Stability Score 1.000\n  ADAEUR:\n    high_volatility: Stability Score 1.000\n    low_volatility: Stability Score 1.000\n    extreme_values: Stability Score 1.000\n    missing_data: Stability Score 1.000\n  XRPEUR:\n    high_volatility: Stability Score 1.000\n    low_volatility: Stability Score 1.000\n    extreme_values: Stability Score 1.000\n    missing_data: Stability Score 1.000\n  ETHEUR:\n    high_volatility: Stability Score 1.000\n    low_volatility: Stability Score 1.000\n    extreme_values: Stability Score 1.000\n    missing_data: Stability Score 1.000\n\n\nBASELINE COMPARISON\n----------------------------------------\n\nGRU Model:\n  Overall Improvement: 0.00%\n\nLIGHTGBM Model:\n  Overall Improvement: 0.00%\n\n\n================================================================================"
+  "report": "================================================================================\nCOMPREHENSIVE MODEL RE-EVALUATION REPORT\n================================================================================\nGenerated: 2025-08-10 12:39:27\n\nEXECUTIVE SUMMARY\n----------------------------------------\nModels Evaluated: gru, lightgbm, ppo\nSymbols Tested: BTCEUR, SOLEUR, ADAEUR, XRPEUR, ETHEUR\n\nMODEL ACCURACY EVALUATION\n----------------------------------------\n\nGRU Model:\n\nLIGHTGBM Model:\n  BTCEUR:\n    mse: 0.000002\n    mae: 0.000934\n    rmse: 0.001273\n    r2: -0.0004\n    directional_accuracy: 0.5017\n  SOLEUR:\n    mse: 0.000012\n    mae: 0.002568\n    rmse: 0.003403\n    r2: -0.0030\n    directional_accuracy: 0.4878\n  ADAEUR:\n    mse: 0.000015\n    mae: 0.002995\n    rmse: 0.003864\n    r2: -0.0024\n    directional_accuracy: 0.4634\n  XRPEUR:\n    mse: 0.000012\n    mae: 0.002724\n    rmse: 0.003442\n    r2: -0.0021\n    directional_accuracy: 0.4495\n  ETHEUR:\n    mse: 0.000008\n    mae: 0.002126\n    rmse: 0.002892\n    r2: -0.0044\n    directional_accuracy: 0.4843\n\nPPO Model:\n  BTCEUR:\n    note: PPO evaluated via trading performance\n  SOLEUR:\n    note: PPO evaluated via trading performance\n  ADAEUR:\n    note: PPO evaluated via trading performance\n  XRPEUR:\n    note: PPO evaluated via trading performance\n  ETHEUR:\n    note: PPO evaluated via trading performance\n\n\nPROCESSING SPEED BENCHMARKS\n----------------------------------------\n\nGRU Model:\n\nLIGHTGBM Model:\n  BTCEUR:\n    mean_latency_ms: 2.31\n    median_latency_ms: 2.00\n    p95_latency_ms: 3.00\n    p99_latency_ms: 5.08\n    throughput_per_sec: 433.19\n    std_latency_ms: 1.20\n  SOLEUR:\n    mean_latency_ms: 3.82\n    median_latency_ms: 2.00\n    p95_latency_ms: 6.21\n    p99_latency_ms: 37.09\n    throughput_per_sec: 261.53\n    std_latency_ms: 8.16\n  ADAEUR:\n    mean_latency_ms: 2.26\n    median_latency_ms: 2.00\n    p95_latency_ms: 3.00\n    p99_latency_ms: 3.02\n    throughput_per_sec: 442.55\n    std_latency_ms: 0.50\n  XRPEUR:\n    mean_latency_ms: 3.67\n    median_latency_ms: 3.00\n    p95_latency_ms: 6.05\n    p99_latency_ms: 22.38\n    throughput_per_sec: 272.20\n    std_latency_ms: 6.20\n  ETHEUR:\n    mean_latency_ms: 3.96\n    median_latency_ms: 2.00\n    p95_latency_ms: 6.25\n    p99_latency_ms: 22.77\n    throughput_per_sec: 252.43\n    std_latency_ms: 10.27\n\nPPO Model:\n  BTCEUR:\n    mean_latency_ms: 1.10\n    median_latency_ms: 1.00\n    p95_latency_ms: 2.00\n    p99_latency_ms: 2.02\n    throughput_per_sec: 909.61\n    std_latency_ms: 0.50\n  SOLEUR:\n    mean_latency_ms: 0.75\n    median_latency_ms: 1.00\n    p95_latency_ms: 1.00\n    p99_latency_ms: 2.00\n    throughput_per_sec: 1334.10\n    std_latency_ms: 0.48\n  ADAEUR:\n    mean_latency_ms: 0.67\n    median_latency_ms: 1.00\n    p95_latency_ms: 1.00\n    p99_latency_ms: 2.00\n    throughput_per_sec: 1493.47\n    std_latency_ms: 0.51\n  XRPEUR:\n    mean_latency_ms: 0.73\n    median_latency_ms: 1.00\n    p95_latency_ms: 1.00\n    p99_latency_ms: 1.00\n    throughput_per_sec: 1370.72\n    std_latency_ms: 0.44\n  ETHEUR:\n    mean_latency_ms: 0.69\n    median_latency_ms: 1.00\n    p95_latency_ms: 1.00\n    p99_latency_ms: 1.00\n    throughput_per_sec: 1450.19\n    std_latency_ms: 0.46\n\n\nEDGE CASE TESTING RESULTS\n----------------------------------------\n\nGRU Model:\n  BTCEUR:\n    high_volatility: Stability Score 0.000\n    low_volatility: Stability Score 0.000\n    extreme_values: Stability Score 0.000\n    missing_data: Stability Score 0.000\n  SOLEUR:\n    high_volatility: Stability Score 0.000\n    low_volatility: Stability Score 0.000\n    extreme_values: Stability Score 0.000\n    missing_data: Stability Score 0.000\n  ADAEUR:\n    high_volatility: Stability Score 0.000\n    low_volatility: Stability Score 0.000\n    extreme_values: Stability Score 0.000\n    missing_data: Stability Score 0.000\n  XRPEUR:\n    high_volatility: Stability Score 0.000\n    low_volatility: Stability Score 0.000\n    extreme_values: Stability Score 0.000\n    missing_data: Stability Score 0.000\n  ETHEUR:\n    high_volatility: Stability Score 0.000\n    low_volatility: Stability Score 0.000\n    extreme_values: Stability Score 0.000\n    missing_data: Stability Score 0.000\n\nLIGHTGBM Model:\n  BTCEUR:\n    high_volatility: Stability Score 1.000\n    low_volatility: Stability Score 1.000\n    extreme_values: Stability Score 1.000\n    missing_data: Stability Score 1.000\n  SOLEUR:\n    high_volatility: Stability Score 1.000\n    low_volatility: Stability Score 1.000\n    extreme_values: Stability Score 1.000\n    missing_data: Stability Score 1.000\n  ADAEUR:\n    high_volatility: Stability Score 1.000\n    low_volatility: Stability Score 1.000\n    extreme_values: Stability Score 1.000\n    missing_data: Stability Score 1.000\n  XRPEUR:\n    high_volatility: Stability Score 1.000\n    low_volatility: Stability Score 1.000\n    extreme_values: Stability Score 1.000\n    missing_data: Stability Score 1.000\n  ETHEUR:\n    high_volatility: Stability Score 1.000\n    low_volatility: Stability Score 1.000\n    extreme_values: Stability Score 1.000\n    missing_data: Stability Score 1.000\n\nPPO Model:\n  BTCEUR:\n    high_volatility: Stability Score 1.000\n    low_volatility: Stability Score 1.000\n    extreme_values: Stability Score 1.000\n    missing_data: Stability Score 1.000\n  SOLEUR:\n    high_volatility: Stability Score 1.000\n    low_volatility: Stability Score 1.000\n    extreme_values: Stability Score 1.000\n    missing_data: Stability Score 1.000\n  ADAEUR:\n    high_volatility: Stability Score 1.000\n    low_volatility: Stability Score 1.000\n    extreme_values: Stability Score 1.000\n    missing_data: Stability Score 1.000\n  XRPEUR:\n    high_volatility: Stability Score 1.000\n    low_volatility: Stability Score 1.000\n    extreme_values: Stability Score 1.000\n    missing_data: Stability Score 1.000\n  ETHEUR:\n    high_volatility: Stability Score 1.000\n    low_volatility: Stability Score 1.000\n    extreme_values: Stability Score 1.000\n    missing_data: Stability Score 1.000\n\n\nBASELINE COMPARISON\n----------------------------------------\n\nGRU Model:\n  Overall Improvement: 0.00%\n\nLIGHTGBM Model:\n  Overall Improvement: 0.00%\n\n\n================================================================================"
 }
