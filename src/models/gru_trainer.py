@@ -618,7 +618,7 @@ class GRUTrainer:
     @classmethod
     def load_model(cls, filepath: str, config: Dict[str, Any]) -> 'GRUTrainer':
         """
-        Load a trained model.
+        Load a trained model with architecture compatibility.
         
         Args:
             filepath: Path to the saved model
@@ -636,8 +636,13 @@ class GRUTrainer:
         # Create trainer instance
         trainer = cls(config)
         
-        # Build model with saved configuration
+        # Use saved model configuration instead of current config for architecture compatibility
         model_config = checkpoint['model_config']
+        trainer.hidden_size = model_config['hidden_size']
+        trainer.num_layers = model_config['num_layers']
+        trainer.dropout = model_config['dropout']
+        
+        # Build model with saved configuration
         trainer.build_model(model_config['input_size'])
         
         # Load model state
@@ -649,6 +654,6 @@ class GRUTrainer:
         trainer.val_losses = checkpoint.get('val_losses', [])
         trainer.best_val_loss = checkpoint.get('best_val_loss', float('inf'))
         
-        logger.info(f"Model loaded from {filepath}")
+        logger.info(f"Model loaded from {filepath} with architecture: {model_config}")
         
         return trainer

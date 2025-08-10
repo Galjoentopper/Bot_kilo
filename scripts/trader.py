@@ -426,6 +426,15 @@ class PaperTrader:
                     signals[symbol] = signal
                     continue
                 
+                # Validate feature count for model compatibility
+                original_feature_count = features.shape[1]
+                
+                # Apply feature validation for each model type
+                if 'lightgbm' in self.models:
+                    features_lgbm = self.feature_engine.pad_features_for_model(features.copy(), 'lightgbm')
+                    if features_lgbm.shape[1] != original_feature_count:
+                        self.logger.logger.debug(f"Adjusted features for LightGBM: {original_feature_count} -> {features_lgbm.shape[1]}")
+                
                 # Get latest features
                 latest_features = features.iloc[-1:].values
                 self.logger.logger.debug(f"Latest features shape for {symbol}: {latest_features.shape}")
@@ -475,12 +484,16 @@ class PaperTrader:
                 # LightGBM prediction
                 if 'lightgbm' in self.models:
                     try:
+                        # Use properly padded features for LightGBM
+                        features_lgbm = self.feature_engine.pad_features_for_model(features.copy(), 'lightgbm')
+                        latest_features_lgbm = features_lgbm.iloc[-1:].values
+                        
                         # Validate input features
-                        if np.isnan(latest_features).any() or np.isinf(latest_features).any():
+                        if np.isnan(latest_features_lgbm).any() or np.isinf(latest_features_lgbm).any():
                             self.logger.logger.warning(f"Invalid values in features for {symbol}, skipping LightGBM prediction")
                             continue
                         
-                        lgbm_pred = self.models['lightgbm'].predict(latest_features)[0]
+                        lgbm_pred = self.models['lightgbm'].predict(latest_features_lgbm)[0]
                         
                         # Validate prediction
                         if np.isnan(lgbm_pred) or np.isinf(lgbm_pred):
@@ -494,16 +507,53 @@ class PaperTrader:
                 # PPO prediction (if available)
                 if 'ppo' in self.models:
                     try:
-                        # For PPO, we need to prepare the observation space
-                        # Use the latest features as observation
-                        observation = latest_features[-1:]  # Get last row as observation
-                        if observation.shape[1] > 0:  # Ensure we have features
-                            # Validate observation
+                        # For PPO, we need to prepare the observation space correctly
+                        sequence_length = self.config.get('models', {}).get('gru', {}).get('sequence_length', 20)
+                        
+                        if len(features) >= sequence_length:
+                            # Ensure we have exactly 113 market features for PPO compatibility
+                            features_ppo = self.feature_engine.pad_features_for_model(features.copy(), 'ppo')
+                            
+                            # Create sequence for PPO with proper preprocessing
+                            try:
+                                features_scaled = self.preprocessor.fit_transform(features_ppo)
+                            except Exception as e:
+                                self.logger.logger.warning(f"Preprocessing failed for {symbol}: {e}")
+                                # Try with just transform if fit fails
+                                try:
+                                    features_scaled = self.preprocessor.transform(features_ppo)
+                                except Exception as e2:
+                                    self.logger.logger.error(f"Transform also failed for {symbol}: {e2}")
+                                    continue
+                            
+                            # Create sequence with proper 2D shape for PPO: (sequence_length, features)
+                            sequence_2d = features_scaled[-sequence_length:]  # Shape: (20, 113)
+                            
+                            # Add portfolio features to match TradingEnvironment format (20, 116)
+                            portfolio_features = np.array([
+                                1.0,  # balance_ratio (normalized)
+                                0.0,  # position_ratio
+                                0.0   # pnl_ratio
+                            ])
+                            
+                            # Repeat portfolio features for each timestep
+                            portfolio_matrix = np.tile(portfolio_features, (sequence_length, 1))  # Shape: (20, 3)
+                            
+                            # Combine market and portfolio features
+                            observation = np.concatenate([sequence_2d, portfolio_matrix], axis=1)  # Shape: (20, 116)
+                            
+                            # Validate observation shape and values
+                            if observation.shape != (sequence_length, 116):
+                                self.logger.logger.warning(f"PPO observation shape mismatch: {observation.shape} != ({sequence_length}, 116)")
+                                continue
+                                
                             if np.isnan(observation).any() or np.isinf(observation).any():
-                                self.logger.logger.warning(f"Invalid values in observation for {symbol}, skipping PPO prediction")
+                                self.logger.logger.warning(f"Invalid observation for {symbol}, skipping PPO")
                                 continue
                             
+                            # PPO expects 2D observation: (sequence_length, features)
                             ppo_action, _ = self.models['ppo'].predict(observation, deterministic=True)
+                            
                             # Convert action to prediction value
                             # Action 0 = Hold, 1 = Buy, 2 = Sell
                             if ppo_action == 1:
@@ -519,6 +569,9 @@ class PaperTrader:
                                 continue
                                 
                             predictions.append(('ppo', ppo_pred))
+                            self.logger.logger.debug(f"PPO prediction for {symbol}: action={ppo_action}, pred={ppo_pred}")
+                        else:
+                            self.logger.logger.debug(f"Insufficient data for PPO sequence: {len(features)} < {sequence_length}")
                     except Exception as e:
                         self.logger.logger.debug(f"PPO prediction failed for {symbol}: {e}")
                 

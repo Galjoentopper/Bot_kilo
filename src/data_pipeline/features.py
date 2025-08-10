@@ -93,6 +93,9 @@ class FeatureEngine:
         # Custom features
         features_df = self._add_custom_features(features_df)
         
+        # Advanced features for PPO compatibility (9 additional features)
+        features_df = self._add_advanced_features(features_df)
+        
         # Remove any infinite or NaN values with more robust handling
         features_df = features_df.replace([np.inf, -np.inf], np.nan)
         
@@ -394,6 +397,28 @@ class FeatureEngine:
         
         return df
     
+    def _add_advanced_features(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Add 9 advanced technical indicators for PPO compatibility."""
+        
+        # 1. Ichimoku Cloud Components (3 features)
+        df['ichimoku_tenkan'] = self._calculate_ichimoku_tenkan(df)
+        df['ichimoku_kijun'] = self._calculate_ichimoku_kijun(df)
+        df['ichimoku_senkou_a'] = self._calculate_ichimoku_senkou_a(df)
+        
+        # 2. Advanced Volume Indicators (2 features)
+        df['vwap_deviation'] = self._calculate_vwap_deviation(df)
+        df['accumulation_distribution'] = self._calculate_accumulation_distribution(df)
+        
+        # 3. Market Microstructure (2 features)
+        df['spread_proxy'] = self._calculate_spread_proxy(df)
+        df['price_impact'] = self._calculate_price_impact(df)
+        
+        # 4. Regime Detection (2 features)
+        df['trend_strength_index'] = self._calculate_trend_strength_index(df)
+        df['market_regime'] = self._calculate_market_regime(df)
+        
+        return df
+    
     # Technical indicator calculation methods
     def _calculate_rsi(self, prices: pd.Series, period: int = 14) -> pd.Series:
         """Calculate RSI with improved error handling."""
@@ -553,3 +578,140 @@ class FeatureEngine:
         logger.info(f"Prepared {feature_array.shape[1]} features for {feature_array.shape[0]} samples")
         
         return feature_array, list(feature_df.columns)
+    
+    def validate_feature_consistency(self, df: pd.DataFrame, expected_count: int = 105) -> pd.DataFrame:
+        """
+        Ensure consistent feature count for model compatibility.
+        
+        Args:
+            df: DataFrame with features
+            expected_count: Expected number of features
+            
+        Returns:
+            DataFrame with consistent feature count
+        """
+        feature_cols = self.get_feature_names(df)
+        current_count = len(feature_cols)
+        
+        if current_count != expected_count:
+            logger.warning(f"Feature count mismatch: {current_count} vs expected {expected_count}")
+            
+            if current_count < expected_count:
+                # Add zero-filled dummy features
+                for i in range(current_count, expected_count):
+                    df[f'dummy_feature_{i}'] = 0.0
+                logger.info(f"Added {expected_count - current_count} dummy features")
+            elif current_count > expected_count:
+                # Remove excess features (keep most important ones based on name patterns)
+                excess_features = feature_cols[expected_count:]
+                df = df.drop(columns=excess_features)
+                logger.info(f"Removed {current_count - expected_count} excess features")
+        
+        return df
+    
+    def pad_features_for_model(self, df: pd.DataFrame, model_type: str) -> pd.DataFrame:
+        """
+        Pad or trim features for specific model compatibility.
+        
+        Args:
+            df: DataFrame with features
+            model_type: Type of model ('lightgbm', 'gru', 'ppo')
+            
+        Returns:
+            DataFrame with model-compatible feature count
+        """
+        expected_counts = {
+            'lightgbm': 105,  # Keep original for backward compatibility
+            'gru': 105,       # Keep original for backward compatibility
+            'ppo': 113        # Market features only (portfolio features added by TradingEnvironment)
+        }
+        
+        expected = expected_counts.get(model_type, len(self.get_feature_names(df)))
+        return self.validate_feature_consistency(df, expected)
+    
+    # Advanced technical indicator calculation methods
+    def _calculate_ichimoku_tenkan(self, df: pd.DataFrame, period: int = 9) -> pd.Series:
+        """Calculate Ichimoku Tenkan-sen (Conversion Line)."""
+        high_max = df['high'].rolling(window=period).max()
+        low_min = df['low'].rolling(window=period).min()
+        tenkan = (high_max + low_min) / 2
+        return tenkan.bfill().fillna(df['close'])
+    
+    def _calculate_ichimoku_kijun(self, df: pd.DataFrame, period: int = 26) -> pd.Series:
+        """Calculate Ichimoku Kijun-sen (Base Line)."""
+        high_max = df['high'].rolling(window=period).max()
+        low_min = df['low'].rolling(window=period).min()
+        kijun = (high_max + low_min) / 2
+        return kijun.bfill().fillna(df['close'])
+    
+    def _calculate_ichimoku_senkou_a(self, df: pd.DataFrame) -> pd.Series:
+        """Calculate Ichimoku Senkou Span A (Leading Span A)."""
+        tenkan = self._calculate_ichimoku_tenkan(df)
+        kijun = self._calculate_ichimoku_kijun(df)
+        senkou_a = (tenkan + kijun) / 2
+        return senkou_a.bfill().fillna(df['close'])
+    
+    def _calculate_vwap_deviation(self, df: pd.DataFrame) -> pd.Series:
+        """Calculate VWAP deviation as percentage."""
+        if 'vwap' not in df.columns:
+            # Calculate VWAP if not already present
+            volume_cumsum = df['volume'].cumsum()
+            vwap_numerator = (df['volume'] * df['hlc_avg']).cumsum()
+            vwap = vwap_numerator / (volume_cumsum + 1e-10)
+        else:
+            vwap = df['vwap']
+        
+        # Calculate deviation as percentage
+        vwap_dev = (df['close'] - vwap) / (vwap + 1e-10) * 100
+        return vwap_dev.bfill().fillna(0)
+    
+    def _calculate_accumulation_distribution(self, df: pd.DataFrame) -> pd.Series:
+        """Calculate Accumulation/Distribution Line."""
+        # Money Flow Multiplier
+        clv = ((df['close'] - df['low']) - (df['high'] - df['close'])) / (df['high'] - df['low'] + 1e-10)
+        # Money Flow Volume
+        mfv = clv * df['volume']
+        # Accumulation/Distribution Line (cumulative)
+        adl = mfv.cumsum()
+        return adl.bfill().fillna(0)
+    
+    def _calculate_spread_proxy(self, df: pd.DataFrame) -> pd.Series:
+        """Calculate spread proxy as normalized high-low range."""
+        mid_price = (df['high'] + df['low']) / 2
+        spread_proxy = (df['high'] - df['low']) / (mid_price + 1e-10) * 100
+        return spread_proxy.bfill().fillna(0)
+    
+    def _calculate_price_impact(self, df: pd.DataFrame) -> pd.Series:
+        """Calculate price impact indicator."""
+        price_change = df['close'].pct_change().abs()
+        volume_normalized = df['volume'] / (df['volume'].rolling(20).mean() + 1e-10)
+        price_impact = price_change * volume_normalized
+        return price_impact.bfill().fillna(0)
+    
+    def _calculate_trend_strength_index(self, df: pd.DataFrame, period: int = 25) -> pd.Series:
+        """Calculate Trend Strength Index."""
+        # Calculate momentum
+        momentum = df['close'] - df['close'].shift(period)
+        # Calculate absolute momentum sum
+        abs_momentum_sum = momentum.abs().rolling(window=period).sum()
+        # Calculate directional momentum sum
+        positive_momentum = momentum.where(momentum > 0, 0).rolling(window=period).sum()
+        negative_momentum = momentum.where(momentum < 0, 0).abs().rolling(window=period).sum()
+        
+        # TSI calculation
+        tsi = 100 * (positive_momentum - negative_momentum) / (abs_momentum_sum + 1e-10)
+        return tsi.bfill().fillna(0)
+    
+    def _calculate_market_regime(self, df: pd.DataFrame, period: int = 20) -> pd.Series:
+        """Calculate market regime indicator (trending vs ranging)."""
+        # Calculate price efficiency ratio
+        price_change = abs(df['close'] - df['close'].shift(period))
+        volatility_sum = df['close'].diff().abs().rolling(window=period).sum()
+        efficiency_ratio = price_change / (volatility_sum + 1e-10)
+        
+        # Smooth the efficiency ratio
+        regime = efficiency_ratio.ewm(span=10).mean()
+        
+        # Normalize to 0-100 scale (higher values = trending, lower = ranging)
+        regime_normalized = regime * 100
+        return regime_normalized.bfill().fillna(50)  # Fill with neutral value
