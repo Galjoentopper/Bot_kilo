@@ -4,7 +4,17 @@ A comprehensive, modular trading bot for short-term crypto strategies using hybr
 
 ## 🚀 Features
 
-- **Hybrid ML Architecture**: GRU for sequence prediction, LightGBM for feature-based predictions, PPO for trade execution
+- **Hybrid ML Architecture**: GRU for sequence prediction, LightGBM for fea#### 🔧 Usage Updates:
+```bash
+# Train per-symbol models using updated trainer
+python scripts/trainer.py --model all
+
+# Train for specific symbol only
+python scripts/trainer.py --model all --symbol BTCEUR
+
+# Run unified trading bot
+python scripts/trader.py --config src/config/config.yaml
+```predictions, PPO for trade execution
 - **Comprehensive Data Pipeline**: 15-min interval crypto data with advanced feature engineering
 - **Advanced Feature Engineering**: 50+ technical indicators, volatility metrics, momentum features
 - **Reinforcement Learning**: PPO agent for intelligent trade execution and position sizing
@@ -319,7 +329,51 @@ The system tracks comprehensive metrics:
 4. Push to branch (`git push origin feature/amazing-feature`)
 5. Open Pull Request
 
-## 📄 License
+## � Recent Updates (v2.0)
+
+### Major Redesign - Unified Trading System
+
+**December 2024**: Complete overhaul addressing critical issues and implementing per-symbol model training:
+
+#### 🐛 Issues Fixed:
+- **PPO Predictions Always 0.0**: Fixed action mapping and observation shape for proper PPO predictions
+- **Feature Mismatch**: Resolved inconsistent feature generation between training and trading phases
+- **NaN Value Problems**: Implemented robust NaN handling with multiple imputation strategies
+- **Single Model Issue**: Changed from single model for all symbols to individual per-symbol models
+- **Selective Trading**: Fixed validation issues causing only ADAEUR to trade
+
+#### ✨ New Features:
+- **Per-Symbol Models**: Each cryptocurrency now has its own trained GRU, LightGBM, and PPO models
+- **Enhanced Feature Engineering**: Comprehensive NaN handling with forward/backward fill and mean imputation
+- **Model Metadata**: Feature consistency tracking between training and trading phases
+- **Robust Validation**: Multi-layer data validation with symbol-specific thresholds
+- **Unified Architecture**: Combined best features from trader.py and trader_v2.py
+
+#### 📁 Updated Files:
+- `scripts/trader.py`: Complete rewrite with unified architecture
+- `scripts/trainer_per_symbol.py`: New per-symbol model training script
+- Removed: `scripts/trader_v2.py` (functionality merged into unified trader.py)
+
+#### 🔧 Usage Updates:
+```bash
+# Train per-symbol models (recommended)
+python scripts/trainer_per_symbol.py --model all
+
+# Train for specific symbol only
+python scripts/trainer_per_symbol.py --model all --symbol BTCEUR
+
+# Run unified trading bot
+python scripts/trader.py --config src/config/config.yaml
+```
+
+#### 💡 Key Improvements:
+- **Model Isolation**: Each symbol's unique market characteristics captured in dedicated models
+- **Feature Consistency**: Metadata tracking ensures training/trading feature alignment
+- **Robust Error Handling**: Comprehensive validation prevents trading on invalid data
+- **Multi-Symbol Trading**: All configured symbols now trade simultaneously
+- **Enhanced Logging**: Detailed debugging information for all prediction components
+
+## �📄 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
