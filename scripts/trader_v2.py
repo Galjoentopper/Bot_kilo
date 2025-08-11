@@ -1,8 +1,9 @@
 """
-Paper Trading Script
-===================
+Paper Trading Script V2
+=======================
 
-Main script for running the paper trading bot with trained models.
+Enhanced paper trading bot with realistic position tracking,
+ownership validation, and comprehensive Telegram notifications.
 """
 
 import sys
@@ -18,7 +19,7 @@ import numpy as np
 import yfinance as yf
 import ccxt
 import sqlite3
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 import json
 
 # Add the parent directory to the Python path
@@ -32,15 +33,16 @@ from src.models.gru_trainer import GRUTrainer
 from src.models.lgbm_trainer import LightGBMTrainer
 from src.models.ppo_trainer import PPOTrainer
 from src.notifier.telegram import TelegramNotifier
+from src.trading.position_tracker import PositionTracker, OrderSide
 
-class PaperTrader:
+class EnhancedPaperTrader:
     """
-    Paper trading bot that uses trained models to make trading decisions.
+    Enhanced paper trading bot with realistic position tracking and validation.
     """
     
     def __init__(self, config: dict, models_dir: str = "./models"):
         """
-        Initialize paper trader.
+        Initialize enhanced paper trader.
         
         Args:
             config: Configuration dictionary
@@ -51,23 +53,29 @@ class PaperTrader:
         
         # Initialize components
         self.logger = TradingBotLogger()
-        # Use real-time data fetching instead of data folder
         self.feature_engine = FeatureEngine(config.get('features', {}))
         self.preprocessor = DataPreprocessor()
-        # Remove data_dir dependency - trader uses real-time data only
         
         # Initialize notification system
         try:
             self.notifier = TelegramNotifier.from_config(config)
+            self.logger.logger.info("Telegram notifier initialized successfully")
         except Exception as e:
             self.logger.logger.warning(f"Failed to initialize notifications: {e}")
             self.notifier = None
         
+        # Initialize position tracker with realistic constraints
+        trading_config = config.get('trading', {})
+        self.position_tracker = PositionTracker(
+            initial_capital=trading_config.get('initial_balance', 10000.0),
+            transaction_fee=trading_config.get('transaction_fee', 0.001),
+            slippage=trading_config.get('slippage', 0.0005),
+            max_position_size=trading_config.get('max_position_size', 0.1)
+        )
+        
         # Trading state
-        self.portfolio_value = config.get('trading', {}).get('initial_balance', 10000.0)
-        self.positions = {}  # symbol -> quantity
         self.last_prices = {}  # symbol -> last_price
-        self.daily_start_value = self.portfolio_value
+        self.daily_start_value = self.position_tracker.initial_capital
         
         # Models
         self.models = {}
@@ -75,13 +83,6 @@ class PaperTrader:
         
         # Trading parameters
         self.symbols = config.get('data', {}).get('symbols', ['BTCEUR'])
-        self.max_position_size = config.get('trading', {}).get('max_position_size', 0.1)
-        self.transaction_fee = config.get('trading', {}).get('transaction_fee', 0.001)
-        
-        # Data caching for performance
-        self.data_cache = {}
-        self.cache_expiry = {}
-        self.cache_duration = 60  # Cache data for 60 seconds
         
         # Symbol-specific thresholds based on typical volatility
         self.symbol_thresholds = {
@@ -93,7 +94,16 @@ class PaperTrader:
         }
         self.default_threshold = 0.00008
         
-        self.logger.logger.info(f"Paper trader initialized with ${self.portfolio_value:,.2f}")
+        # Data caching for performance
+        self.data_cache = {}
+        self.cache_expiry = {}
+        self.cache_duration = 60  # Cache data for 60 seconds
+        
+        # Performance tracking
+        self.performance_history = []
+        self.rejected_trades_count = 0
+        
+        self.logger.logger.info(f"Enhanced paper trader initialized with ${self.position_tracker.initial_capital:,.2f}")
     
     def load_models(self):
         """Load trained models."""
@@ -102,7 +112,7 @@ class PaperTrader:
             model_files = {
                 'gru': self._find_latest_model('gru_model_*.pth'),
                 'lightgbm': self._find_latest_model('lightgbm_model_*.pkl'),
-                'ppo': self._find_latest_model('ppo_model_*.zip')  # PPO models are .zip files
+                'ppo': self._find_latest_model('ppo_model_*.zip')
             }
             
             # Load GRU model
@@ -135,16 +145,18 @@ class PaperTrader:
         except Exception as e:
             self.logger.logger.error(f"Error loading models: {e}")
     
-    def _convert_symbol_format(self, symbol: str) -> str:
-        """
-        Convert symbol format to ccxt standard format.
+    def _find_latest_model(self, pattern: str) -> Optional[str]:
+        """Find the latest model file matching pattern."""
+        import glob
         
-        Args:
-            symbol: Symbol in format like BTCEUR, SOLEUR, etc.
-            
-        Returns:
-            Symbol in ccxt format like BTC/EUR, SOL/EUR, etc.
-        """
+        model_files = glob.glob(os.path.join(self.models_dir, pattern))
+        if model_files:
+            # Sort by modification time and return the latest
+            return max(model_files, key=os.path.getmtime)
+        return None
+    
+    def _convert_symbol_format(self, symbol: str) -> str:
+        """Convert symbol format to ccxt standard format."""
         # Handle different base currencies
         if symbol.endswith('EUR'):
             base = symbol[:-3]
@@ -162,19 +174,7 @@ class PaperTrader:
             base = symbol[:-3]
             return f"{base}/ETH"
         else:
-            # If already in correct format or unknown format, return as is
             return symbol
-
-    def _find_latest_model(self, pattern: str) -> Optional[str]:
-        """Find the latest model file matching pattern."""
-        import glob
-        
-        model_files = glob.glob(os.path.join(self.models_dir, pattern))
-        if model_files:
-            # Sort by modification time and return the latest
-            return max(model_files, key=os.path.getmtime)
-        return None
-    
 
     async def get_market_data(self) -> dict:
         """Get latest market data for all symbols using ccxt with error handling."""
@@ -190,7 +190,6 @@ class PaperTrader:
         # Initialize exchange connection with error handling
         exchange = None
         try:
-            # Use synchronous ccxt for now - async ccxt requires different import
             exchange = ccxt.binance({
                 'enableRateLimit': True,
                 'options': {
@@ -198,12 +197,9 @@ class PaperTrader:
                 },
                 'timeout': 30000  # 30 second timeout
             })
-            # Load markets synchronously
             exchange.load_markets()
         except Exception as e:
             self.logger.logger.error(f"Error initializing exchange connection: {e}")
-            # Synchronous ccxt doesn't require explicit connection closing
-            # Connection will be closed automatically
             return market_data
         
         # Track API call statistics
@@ -219,26 +215,22 @@ class PaperTrader:
                 
                 while retry_count < max_retries:
                     try:
-                        # Convert symbol format to ccxt standard format
                         formatted_symbol = self._convert_symbol_format(symbol)
-                        # Use synchronous version of ccxt
                         ohlcv = exchange.fetch_ohlcv(formatted_symbol, '15m', limit=100)
                         api_calls += 1
                         break
                     except ccxt.RateLimitExceeded as e:
                         self.logger.logger.warning(f"Rate limit exceeded for {symbol}, waiting...")
-                        # Use asyncio.sleep for async method
-                        await asyncio.sleep(10)  # Wait 10 seconds before retry
+                        await asyncio.sleep(10)
                         retry_count += 1
                     except ccxt.NetworkError as e:
                         self.logger.logger.warning(f"Network error for {symbol}: {e}")
-                        await asyncio.sleep(5)  # Wait 5 seconds before retry
+                        await asyncio.sleep(5)
                         retry_count += 1
                     except Exception as e:
                         self.logger.logger.error(f"Error fetching data for {symbol}: {e}")
                         retry_count += 1
                 
-                # Check if we successfully fetched data
                 if ohlcv is None:
                     api_errors += 1
                     self.logger.logger.warning(f"Failed to fetch data for {symbol} after {max_retries} attempts")
@@ -264,7 +256,7 @@ class PaperTrader:
                 for col in numeric_columns:
                     df[col] = pd.to_numeric(df[col], errors='coerce')
                 
-                # Use enhanced validation method
+                # Validate market data
                 if not self._validate_market_data(df, symbol):
                     continue
                 
@@ -277,7 +269,6 @@ class PaperTrader:
                     feature_nan_count = features_df.isnull().sum().sum()
                     if feature_nan_count > 0:
                         self.logger.logger.warning(f"Found {feature_nan_count} NaN values in {symbol} features")
-                        # Try to clean features
                         features_df = features_df.fillna(0)
                     
                     market_data[symbol] = features_df
@@ -293,11 +284,7 @@ class PaperTrader:
             except Exception as e:
                 api_errors += 1
                 self.logger.logger.error(f"Error getting data for {symbol}: {e}")
-                # Continue with other symbols even if one fails
                 continue
-        
-        # Synchronous ccxt doesn't require explicit connection closing
-        # Connection will be closed automatically
         
         # Cache the data if we got any
         if market_data:
@@ -334,16 +321,7 @@ class PaperTrader:
             self.cache_expiry[symbol] = expiry_time
     
     def _validate_market_data(self, df: pd.DataFrame, symbol: str) -> bool:
-        """
-        Enhanced data validation for market data.
-        
-        Args:
-            df: DataFrame with market data
-            symbol: Symbol being validated
-            
-        Returns:
-            True if data is valid, False otherwise
-        """
+        """Enhanced data validation for market data."""
         if df.empty:
             self.logger.logger.warning(f"Empty DataFrame for {symbol}")
             return False
@@ -360,7 +338,6 @@ class PaperTrader:
             nan_count = df[col].isnull().sum()
             if nan_count > 0:
                 self.logger.logger.warning(f"Found {nan_count} NaN values in {col} for {symbol}")
-                # Fill NaN values with forward fill, then backward fill
                 df[col] = df[col].ffill().bfill()
         
         # Check for negative prices or volumes
@@ -385,7 +362,6 @@ class PaperTrader:
         # Check data freshness (should be within last 2 hours)
         if isinstance(df.index, pd.DatetimeIndex):
             latest_timestamp = df.index.max()
-            # Ensure both timestamps have the same timezone
             if latest_timestamp.tz is None:
                 latest_timestamp = latest_timestamp.tz_localize('UTC')
             current_time = pd.Timestamp.now(tz='UTC')
@@ -402,15 +378,7 @@ class PaperTrader:
         return True
     
     def generate_signals(self, market_data: dict) -> dict:
-        """
-        Generate trading signals using loaded models.
-        
-        Args:
-            market_data: Dictionary of symbol -> DataFrame
-            
-        Returns:
-            Dictionary of symbol -> signal (-1, 0, 1)
-        """
+        """Generate trading signals using loaded models."""
         signals = {}
         
         self.logger.logger.debug(f"Generating signals for {len(market_data)} symbols")
@@ -436,47 +404,35 @@ class PaperTrader:
                     signals[symbol] = signal
                     continue
                 
-                # Validate feature count for model compatibility
-                original_feature_count = features.shape[1]
-                self.logger.logger.debug(f"Original feature count: {original_feature_count}")
-                
                 # Ensemble prediction
                 predictions = []
                 
                 # GRU prediction
                 if 'gru' in self.models:
                     try:
-                        # Prepare sequence for GRU with proper feature padding
                         sequence_length = self.config.get('models', {}).get('gru', {}).get('sequence_length', 20)
                         if len(features) >= sequence_length:
-                            # Apply feature padding for GRU model
                             features_gru = self.feature_engine.pad_features_for_model(features.copy(), 'gru')
                             self.logger.logger.debug(f"GRU features shape after padding: {features_gru.shape}")
                             
-                            # Scale features using preprocessor (fit on current data for consistency)
                             try:
                                 features_scaled = self.preprocessor.fit_transform(features_gru)
                             except Exception as e:
                                 self.logger.logger.warning(f"Preprocessing failed for {symbol}: {e}")
-                                # Try with just transform if fit fails
                                 try:
                                     features_scaled = self.preprocessor.transform(features_gru)
                                 except Exception as e2:
                                     self.logger.logger.error(f"Transform also failed for {symbol}: {e2}")
                                     continue
                             
-                            # Create sequence
                             sequence = features_scaled[-sequence_length:].reshape(1, sequence_length, -1)
                             
-                            # Validate sequence
                             if np.isnan(sequence).any() or np.isinf(sequence).any():
                                 self.logger.logger.warning(f"Invalid values in sequence for {symbol}, skipping GRU prediction")
                                 continue
                             
-                            # Predict
                             try:
                                 gru_pred = self.models['gru'].predict(sequence)[0]
-                                # Validate prediction
                                 if np.isnan(gru_pred) or np.isinf(gru_pred):
                                     self.logger.logger.warning(f"Invalid prediction from GRU for {symbol}, skipping")
                                     continue
@@ -490,18 +446,15 @@ class PaperTrader:
                 # LightGBM prediction
                 if 'lightgbm' in self.models:
                     try:
-                        # Use properly padded features for LightGBM
                         features_lgbm = self.feature_engine.pad_features_for_model(features.copy(), 'lightgbm')
                         latest_features_lgbm = features_lgbm.iloc[-1:].values
                         
-                        # Validate input features
                         if np.isnan(latest_features_lgbm).any() or np.isinf(latest_features_lgbm).any():
                             self.logger.logger.warning(f"Invalid values in features for {symbol}, skipping LightGBM prediction")
                             continue
                         
                         lgbm_pred = self.models['lightgbm'].predict(latest_features_lgbm)[0]
                         
-                        # Validate prediction
                         if np.isnan(lgbm_pred) or np.isinf(lgbm_pred):
                             self.logger.logger.warning(f"Invalid prediction from LightGBM for {symbol}, skipping")
                             continue
@@ -511,56 +464,37 @@ class PaperTrader:
                     except Exception as e:
                         self.logger.logger.debug(f"LightGBM prediction failed for {symbol}: {e}")
                 
-                # PPO prediction (if available)
+                # PPO prediction
                 if 'ppo' in self.models:
                     try:
-                        # For PPO, we need to prepare the observation space correctly
                         sequence_length = self.config.get('models', {}).get('gru', {}).get('sequence_length', 20)
                         
                         if len(features) >= sequence_length:
-                            # Ensure we have exactly 113 market features for PPO compatibility (excludes ADX)
                             features_ppo = self.feature_engine.pad_features_for_model(features.copy(), 'ppo')
                             ppo_feature_names = self.feature_engine.get_feature_names(features_ppo)
                             
-                            # Create sequence for PPO with proper preprocessing
                             try:
                                 features_scaled = self.preprocessor.fit_transform(features_ppo[ppo_feature_names])
                             except Exception as e:
                                 self.logger.logger.warning(f"Preprocessing failed for {symbol}: {e}")
-                                # Try with just transform if fit fails
                                 try:
                                     features_scaled = self.preprocessor.transform(features_ppo[ppo_feature_names])
                                 except Exception as e2:
                                     self.logger.logger.error(f"Transform also failed for {symbol}: {e2}")
                                     continue
                             
-                            # Create sequence with proper 2D shape for PPO: (sequence_length, features)
-                            sequence_2d = features_scaled[-sequence_length:]  # Shape: (20, 113)
+                            sequence_2d = features_scaled[-sequence_length:]
                             
-                            # Add portfolio features to match TradingEnvironment format
-                            # PPO expects (20, 125) total, so we need 125 - 113 = 12 additional features
                             portfolio_features = np.array([
                                 1.0,  # balance_ratio (normalized)
                                 0.0,  # position_ratio
                                 0.0,  # pnl_ratio
-                                0.0,  # additional feature 1
-                                0.0,  # additional feature 2
-                                0.0,  # additional feature 3
-                                0.0,  # additional feature 4
-                                0.0,  # additional feature 5
-                                0.0,  # additional feature 6
-                                0.0,  # additional feature 7
-                                0.0,  # additional feature 8
-                                0.0   # additional feature 9
+                                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0  # additional features
                             ])
                             
-                            # Repeat portfolio features for each timestep
-                            portfolio_matrix = np.tile(portfolio_features, (sequence_length, 1))  # Shape: (20, 12)
+                            portfolio_matrix = np.tile(portfolio_features, (sequence_length, 1))
+                            observation = np.concatenate([sequence_2d, portfolio_matrix], axis=1)
                             
-                            # Combine market and portfolio features
-                            observation = np.concatenate([sequence_2d, portfolio_matrix], axis=1)  # Shape: (20, 125)
-                            
-                            # Validate observation shape and values
                             if observation.shape != (sequence_length, 125):
                                 self.logger.logger.warning(f"PPO observation shape mismatch: {observation.shape} != ({sequence_length}, 125)")
                                 continue
@@ -569,26 +503,20 @@ class PaperTrader:
                                 self.logger.logger.warning(f"Invalid observation for {symbol}, skipping PPO")
                                 continue
                             
-                            # PPO expects 2D observation: (sequence_length, features)
                             ppo_action, _ = self.models['ppo'].predict(observation, deterministic=True)
                             
-                            # Convert action to prediction value with more nuanced signals
-                            # PPO might return a numpy array, so extract the value
                             if hasattr(ppo_action, '__len__'):
                                 action_value = int(ppo_action[0])
                             else:
                                 action_value = int(ppo_action)
                             
-                            # Action 0 = Hold, 1 = Buy, 2 = Sell
-                            # Use the raw PPO value output for more continuous predictions
                             if action_value == 1:
-                                ppo_pred = 0.0015  # Buy signal (reduced from 0.002)
+                                ppo_pred = 0.0015  # Buy signal
                             elif action_value == 2:
-                                ppo_pred = -0.0015  # Sell signal (reduced from -0.002)
+                                ppo_pred = -0.0015  # Sell signal
                             else:
                                 ppo_pred = 0.0  # Hold signal
                             
-                            # Validate prediction
                             if np.isnan(ppo_pred) or np.isinf(ppo_pred):
                                 self.logger.logger.warning(f"Invalid prediction from PPO for {symbol}, skipping")
                                 continue
@@ -609,12 +537,10 @@ class PaperTrader:
                 
                 # Convert predictions to signals
                 if predictions:
-                    # Simple ensemble: average predictions
                     try:
                         prediction_values = [pred for _, pred in predictions]
                         avg_prediction = np.mean(prediction_values)
                         
-                        # Validate average prediction
                         if np.isnan(avg_prediction) or np.isinf(avg_prediction):
                             self.logger.logger.warning(f"Invalid average prediction for {symbol}: {avg_prediction}")
                             signal = 0  # Hold
@@ -633,7 +559,6 @@ class PaperTrader:
                             else:
                                 signal = 0  # Hold
                             
-                            # Always log prediction info for debugging
                             self.logger.logger.info(f"Ensemble prediction for {symbol}: avg={avg_prediction:.8f}, threshold={threshold:.8f}, signal={signal}")
                             self.logger.logger.info(f"Individual predictions: {predictions}")
                     except Exception as e:
@@ -659,20 +584,16 @@ class PaperTrader:
         self.logger.logger.debug(f"Generated signals for {len(signals)} symbols")
         return signals
     
-    def execute_trades(self, signals: dict):
-        """
-        Execute trades based on signals.
-        
-        Args:
-            signals: Dictionary of symbol -> signal
-        """
+    async def execute_trades(self, signals: dict):
+        """Execute trades based on signals with proper validation."""
         # Calculate available capital per symbol
         active_symbols = [s for s, sig in signals.items() if sig != 0]
         if not active_symbols:
             return
         
         # Allocate capital across active symbols
-        capital_per_symbol = self.portfolio_value * self.max_position_size / max(len(active_symbols), 1)
+        portfolio_value = self.position_tracker.calculate_portfolio_value(self.last_prices)
+        capital_per_symbol = portfolio_value * self.position_tracker.max_position_size / max(len(active_symbols), 1)
         
         for symbol, signal in signals.items():
             if signal == 0:
@@ -684,116 +605,196 @@ class PaperTrader:
                     self.logger.logger.warning(f"Invalid price for {symbol}: {current_price}")
                     continue
                 
-                current_position = self.positions.get(symbol, 0.0)
+                # Get current position from position tracker
+                current_position = self.position_tracker.positions.get(symbol)
+                current_quantity = current_position.quantity if current_position else 0.0
                 
-                # Calculate target position with capital allocation
-                if signal > 0:  # Buy
-                    target_position_value = capital_per_symbol
-                else:  # Sell
-                    target_position_value = -capital_per_symbol
+                # Use allocated capital for this symbol
+                target_position_value = capital_per_symbol
                 
-                target_position = target_position_value / current_price if current_price > 0 else 0.0
+                if signal > 0:  # Buy signal
+                    # Calculate how much to buy
+                    target_quantity = target_position_value / current_price
+                    buy_quantity = target_quantity - current_quantity
+                    
+                    # Check minimum trade size (adjusted for each symbol)
+                    min_trade_sizes = {
+                        'BTCEUR': 0.00001,   # Smaller for expensive assets
+                        'ETHEUR': 0.0001,
+                        'SOLEUR': 0.01,
+                        'ADAEUR': 1.0,
+                        'XRPEUR': 1.0
+                    }
+                    min_trade_size = min_trade_sizes.get(symbol, 0.001)
+                    
+                    if buy_quantity > min_trade_size:
+                        # Execute buy order with validation
+                        success, trade, error_msg = self.position_tracker.execute_buy(
+                            symbol=symbol,
+                            quantity=buy_quantity,
+                            price=current_price
+                        )
+                        
+                        if success and trade:
+                            # Log successful trade
+                            self.logger.log_trade(
+                                symbol=symbol,
+                                side="BUY",
+                                quantity=buy_quantity,
+                                price=current_price,
+                                portfolio_value=portfolio_value
+                            )
+                            
+                            # Send Telegram notification
+                            if self.notifier and self.notifier.enabled:
+                                await self._send_trade_notification(trade, portfolio_value)
+                            
+                            self.logger.logger.info(f"Executed SELL {sell_quantity:.6f} {symbol} @ {current_price:.2f}")
+                            
+                            self.logger.logger.info(f"Executed BUY {buy_quantity:.6f} {symbol} @ {current_price:.2f}")
+                        else:
+                            # Log rejected trade
+                            self.rejected_trades_count += 1
+                            self.logger.logger.warning(f"Buy order rejected for {symbol}: {error_msg}")
+                            
+                            # Send rejection notification
+                            if self.notifier and self.notifier.enabled:
+                                await self._send_rejection_notification(
+                                    symbol=symbol,
+                                    side="BUY",
+                                    quantity=buy_quantity,
+                                    price=current_price,
+                                    reason=error_msg
+                                )
                 
-                # Calculate trade size
-                trade_size = target_position - current_position
-                
-                # Check minimum trade size (adjusted for each symbol)
-                min_trade_sizes = {
-                    'BTCEUR': 0.00001,   # Smaller for expensive assets
-                    'ETHEUR': 0.0001,
-                    'SOLEUR': 0.01,
-                    'ADAEUR': 1.0,
-                    'XRPEUR': 1.0
-                }
-                min_trade_size = min_trade_sizes.get(symbol, 0.001)
-                
-                if abs(trade_size) < min_trade_size:
-                    self.logger.logger.debug(f"Trade size too small for {symbol}: {abs(trade_size)} < {min_trade_size}")
-                    continue
-                
-                # Execute trade
-                trade_value = abs(trade_size) * current_price
-                fee = trade_value * self.transaction_fee
-                
-                # Check if we have enough funds for the trade
-                if trade_size > 0 and (trade_value + fee) > self.portfolio_value:
-                    # Not enough funds, adjust trade size
-                    available_funds = self.portfolio_value / (current_price * (1 + self.transaction_fee))
-                    trade_size = min(trade_size, available_funds * 0.95)  # Use 95% to leave some buffer
-                    if abs(trade_size) < min_trade_size:
-                        continue
-                    trade_value = abs(trade_size) * current_price
-                    fee = trade_value * self.transaction_fee
-                
-                # Update portfolio
-                if trade_size > 0:  # Buying
-                    self.portfolio_value -= (trade_value + fee)
-                    side = "BUY"
-                else:  # Selling
-                    self.portfolio_value += (trade_value - fee)
-                    side = "SELL"
-                
-                # Update position
-                self.positions[symbol] = current_position + trade_size
-                
-                # Log trade
-                self.logger.log_trade(
-                    symbol=symbol,
-                    side=side,
-                    quantity=abs(trade_size),
-                    price=current_price,
-                    portfolio_value=self.portfolio_value
-                )
-                
-                self.logger.logger.info(f"Executed {side} {abs(trade_size):.6f} {symbol} @ {current_price:.2f}")
-                
-                # Send notification
-                if self.notifier and self.notifier.enabled:
-                    asyncio.create_task(self.notifier.send_trade_notification(
-                        symbol=symbol,
-                        side=side,
-                        quantity=abs(trade_size),
-                        price=current_price,
-                        portfolio_value=self.portfolio_value
-                    ))
+                elif signal < 0:  # Sell signal
+                    # Calculate how much to sell
+                    if current_quantity > 0:
+                        sell_quantity = min(current_quantity, target_position_value / current_price)
+                        
+                        if sell_quantity > min_trade_size:
+                            # Execute sell order with validation
+                            success, trade, error_msg = self.position_tracker.execute_sell(
+                                symbol=symbol,
+                                quantity=sell_quantity,
+                                price=current_price
+                            )
+                            
+                            if success and trade:
+                                # Log successful trade
+                                self.logger.log_trade(
+                                    symbol=symbol,
+                                    side="SELL",
+                                    quantity=sell_quantity,
+                                    price=current_price,
+                                    portfolio_value=portfolio_value
+                                )
+                                
+                                # Send Telegram notification
+                                if self.notifier and self.notifier.enabled:
+                                    await self._send_trade_notification(trade, portfolio_value)
+                            else:
+                                # Log rejected trade
+                                self.rejected_trades_count += 1
+                                self.logger.logger.warning(f"Sell order rejected for {symbol}: {error_msg}")
+                                
+                                # Send rejection notification
+                                if self.notifier and self.notifier.enabled:
+                                    await self._send_rejection_notification(
+                                        symbol=symbol,
+                                        side="SELL",
+                                        quantity=sell_quantity,
+                                        price=current_price,
+                                        reason=error_msg
+                                    )
+                    else:
+                        self.logger.logger.info(f"Sell signal for {symbol} ignored - no position to sell")
             
             except Exception as e:
                 self.logger.logger.error(f"Error executing trade for {symbol}: {e}")
     
-    def calculate_portfolio_value(self) -> float:
-        """Calculate current portfolio value including positions."""
-        total_value = self.portfolio_value
-        
-        # Validate that portfolio_value is not negative
-        if total_value < 0:
-            self.logger.logger.warning(f"Negative portfolio value: {total_value}")
-            total_value = 0.0
-        
-        for symbol, quantity in self.positions.items():
-            if abs(quantity) > 1e-6:  # Non-zero position
-                current_price = self.last_prices.get(symbol, 0)
-                # Validate price
-                if current_price > 0:
-                    position_value = quantity * current_price
-                    # Validate position value
-                    if not (np.isnan(position_value) or np.isinf(position_value)):
-                        total_value += position_value
-                    else:
-                        self.logger.logger.warning(f"Invalid position value for {symbol}: {position_value}")
-                else:
-                    self.logger.logger.warning(f"Invalid price for {symbol}: {current_price}")
-        
-        # Ensure total value is not negative
-        if total_value < 0:
-            self.logger.logger.warning(f"Calculated negative portfolio value: {total_value}, setting to 0")
-            total_value = 0.0
+    async def _send_trade_notification(self, trade, portfolio_value: float):
+        """Send enhanced trade notification via Telegram."""
+        try:
+            # Get position summary
+            position = self.position_tracker.positions.get(trade.symbol)
+            position_quantity = position.quantity if position else 0.0
+            avg_price = position.average_entry_price if position else 0.0
             
-        return total_value
+            # Calculate P&L if selling
+            realized_pnl = 0.0
+            if trade.side == OrderSide.SELL and position:
+                # Estimate realized P&L for this trade
+                realized_pnl = (trade.price - avg_price) * trade.quantity - trade.commission - trade.slippage
+            
+            message = (
+                f"🔔 **Trade Executed**\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"**Symbol:** {trade.symbol}\n"
+                f"**Side:** {trade.side.value} {'📈' if trade.side == OrderSide.BUY else '📉'}\n"
+                f"**Quantity:** {trade.quantity:.6f}\n"
+                f"**Price:** ${trade.price:.2f}\n"
+                f"**Value:** ${trade.quantity * trade.price:.2f}\n"
+                f"**Fees:** ${trade.commission + trade.slippage:.2f}\n"
+            )
+            
+            if trade.side == OrderSide.SELL and realized_pnl != 0:
+                message += f"**Realized P&L:** ${realized_pnl:+.2f} {'🟢' if realized_pnl > 0 else '🔴'}\n"
+            
+            message += (
+                f"\n**Position Update:**\n"
+                f"• Current Position: {position_quantity:.6f}\n"
+                f"• Average Price: ${avg_price:.2f}\n"
+                f"• Position Value: ${position_quantity * trade.price:.2f}\n"
+                f"\n**Portfolio:**\n"
+                f"• Total Value: ${portfolio_value:.2f}\n"
+                f"• Cash: ${self.position_tracker.cash:.2f}\n"
+                f"━━━━━━━━━━━━━━━━━━"
+            )
+            
+            await self.notifier.send_message(message)
+            
+        except Exception as e:
+            self.logger.logger.error(f"Error sending trade notification: {e}")
+    
+    async def _send_rejection_notification(self, symbol: str, side: str, quantity: float, price: float, reason: str):
+        """Send trade rejection notification via Telegram."""
+        try:
+            message = (
+                f"⚠️ **Trade Rejected**\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"**Symbol:** {symbol}\n"
+                f"**Side:** {side} {'📈' if side == 'BUY' else '📉'}\n"
+                f"**Quantity:** {quantity:.6f}\n"
+                f"**Price:** ${price:.2f}\n"
+                f"**Reason:** {reason}\n"
+                f"\n**Current Status:**\n"
+                f"• Cash Available: ${self.position_tracker.cash:.2f}\n"
+            )
+            
+            # Add position info if relevant
+            position = self.position_tracker.positions.get(symbol)
+            if position and position.quantity > 0:
+                message += f"• Position in {symbol}: {position.quantity:.6f}\n"
+            
+            message += (
+                f"• Total Rejected Trades: {self.rejected_trades_count}\n"
+                f"━━━━━━━━━━━━━━━━━━"
+            )
+            
+            await self.notifier.send_message(message)
+            
+        except Exception as e:
+            self.logger.logger.error(f"Error sending rejection notification: {e}")
     
     async def send_daily_report(self):
-        """Send daily portfolio report."""
+        """Send comprehensive daily portfolio report with enhanced metrics."""
         try:
-            current_value = self.calculate_portfolio_value()
+            # Get portfolio summary
+            portfolio_summary = self.position_tracker.get_portfolio_summary(self.last_prices)
+            
+            # Calculate daily metrics
+            current_value = portfolio_summary['portfolio_value']
             daily_pnl = current_value - self.daily_start_value
             daily_return = daily_pnl / self.daily_start_value
             
@@ -801,17 +802,75 @@ class PaperTrader:
             self.logger.log_portfolio_update(
                 portfolio_value=current_value,
                 daily_pnl=daily_pnl,
-                positions=self.positions
+                positions={p['symbol']: p['quantity'] for p in portfolio_summary['positions']}
             )
+            
+            # Build detailed report message
+            message = (
+                f"📊 **Daily Portfolio Report**\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
+                f"\n**Portfolio Performance:**\n"
+                f"• Total Value: ${current_value:,.2f}\n"
+                f"• Daily P&L: ${daily_pnl:+,.2f} ({daily_return:+.2%}) "
+                f"{'🟢' if daily_pnl >= 0 else '🔴'}\n"
+                f"• Total Return: ${portfolio_summary['total_pnl']:+,.2f} "
+                f"({portfolio_summary['total_return_pct']:+.2f}%)\n"
+                f"• Realized P&L: ${portfolio_summary['realized_pnl']:+,.2f}\n"
+                f"• Unrealized P&L: ${portfolio_summary['unrealized_pnl']:+,.2f}\n"
+                f"\n**Account Status:**\n"
+                f"• Cash Balance: ${portfolio_summary['cash']:,.2f}\n"
+                f"• Positions Value: ${current_value - portfolio_summary['cash']:,.2f}\n"
+                f"• Total Trades: {portfolio_summary['total_trades']}\n"
+                f"• Rejected Orders: {portfolio_summary['rejected_orders']}\n"
+            )
+            
+            # Add position details
+            if portfolio_summary['positions']:
+                message += f"\n**Open Positions:**\n"
+                for pos in portfolio_summary['positions']:
+                    pnl_emoji = '🟢' if pos['unrealized_pnl'] >= 0 else '🔴'
+                    message += (
+                        f"\n• **{pos['symbol']}**\n"
+                        f"  - Quantity: {pos['quantity']:.6f}\n"
+                        f"  - Avg Price: ${pos['average_price']:.2f}\n"
+                        f"  - Current: ${pos['current_price']:.2f}\n"
+                        f"  - Value: ${pos['market_value']:.2f}\n"
+                        f"  - Unrealized P&L: ${pos['unrealized_pnl']:+.2f} {pnl_emoji}\n"
+                    )
+            else:
+                message += f"\n**No open positions**\n"
+            
+            # Add performance metrics
+            if len(self.performance_history) > 0:
+                returns = [p['daily_return'] for p in self.performance_history[-30:]]  # Last 30 days
+                if returns:
+                    avg_return = np.mean(returns)
+                    volatility = np.std(returns) * np.sqrt(365)  # Annualized
+                    sharpe = (avg_return * 365) / volatility if volatility > 0 else 0
+                    
+                    message += (
+                        f"\n**Performance Metrics (30d):**\n"
+                        f"• Avg Daily Return: {avg_return:.2%}\n"
+                        f"• Volatility: {volatility:.2%}\n"
+                        f"• Sharpe Ratio: {sharpe:.2f}\n"
+                    )
+            
+            message += f"\n━━━━━━━━━━━━━━━━━━"
             
             # Send notification
             if self.notifier and self.notifier.enabled:
-                await self.notifier.send_portfolio_update(
-                    portfolio_value=current_value,
-                    daily_pnl=daily_pnl,
-                    daily_return=daily_return,
-                    positions=self.positions
-                )
+                await self.notifier.send_message(message)
+            
+            # Store performance data
+            self.performance_history.append({
+                'date': datetime.now(),
+                'portfolio_value': current_value,
+                'daily_pnl': daily_pnl,
+                'daily_return': daily_return,
+                'total_return': portfolio_summary['total_return'],
+                'positions': len(portfolio_summary['positions'])
+            })
             
             # Reset daily start value
             self.daily_start_value = current_value
@@ -821,20 +880,31 @@ class PaperTrader:
     
     async def run_trading_loop(self, interval_minutes: int = 15):
         """
-        Main trading loop.
+        Main trading loop with enhanced error handling and notifications.
         
         Args:
             interval_minutes: Trading interval in minutes
         """
-        self.logger.logger.info(f"Starting paper trading loop (interval: {interval_minutes} minutes)")
+        self.logger.logger.info(f"Starting enhanced paper trading loop (interval: {interval_minutes} minutes)")
         
+        # Send startup notification
         if self.notifier and self.notifier.enabled:
-            await self.notifier.send_system_status(
-                status="RUNNING",
-                active_models=list(self.models.keys())
+            startup_message = (
+                f"🚀 **Trading Bot Started**\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"**Initial Capital:** ${self.position_tracker.initial_capital:,.2f}\n"
+                f"**Active Models:** {', '.join(self.models.keys()) if self.models else 'None'}\n"
+                f"**Symbols:** {', '.join(self.symbols)}\n"
+                f"**Max Position Size:** {self.position_tracker.max_position_size * 100:.0f}%\n"
+                f"**Transaction Fee:** {self.position_tracker.transaction_fee * 100:.1f}%\n"
+                f"**Trading Interval:** {interval_minutes} minutes\n"
+                f"━━━━━━━━━━━━━━━━━━"
             )
+            await self.notifier.send_message(startup_message)
         
         last_daily_report = datetime.now().date()
+        consecutive_errors = 0
+        max_consecutive_errors = 5
         
         try:
             while True:
@@ -848,26 +918,50 @@ class PaperTrader:
                         # Generate signals
                         signals = self.generate_signals(market_data)
                         
-                        # Execute trades
-                        self.execute_trades(signals)
+                        # Execute trades with validation
+                        await self.execute_trades(signals)
+                        
+                        # Send hourly portfolio update
+                        if datetime.now().minute == 0:  # On the hour
+                            portfolio_summary = self.position_tracker.get_portfolio_summary(self.last_prices)
+                            hourly_message = (
+                                f"📈 **Hourly Update**\n"
+                                f"Portfolio Value: ${portfolio_summary['portfolio_value']:,.2f}\n"
+                                f"Active Positions: {len(portfolio_summary['positions'])}\n"
+                                f"Cash Available: ${portfolio_summary['cash']:,.2f}"
+                            )
+                            if self.notifier and self.notifier.enabled:
+                                await self.notifier.send_message(hourly_message)
                         
                         # Send daily report if needed
                         current_date = datetime.now().date()
                         if current_date > last_daily_report:
                             await self.send_daily_report()
                             last_daily_report = current_date
+                        
+                        # Reset error counter on successful iteration
+                        consecutive_errors = 0
                     
                     else:
                         self.logger.logger.warning("No market data available")
+                        consecutive_errors += 1
                 
                 except Exception as e:
+                    consecutive_errors += 1
                     self.logger.logger.error(f"Error in trading loop: {e}")
                     
-                    if self.notifier and self.notifier.enabled:
-                        await self.notifier.send_error_notification(
-                            error_type="TRADING_LOOP_ERROR",
-                            error_message=str(e)
-                        )
+                    # Send error notification if critical
+                    if consecutive_errors >= max_consecutive_errors:
+                        if self.notifier and self.notifier.enabled:
+                            error_message = (
+                                f"🚨 **Critical Error**\n"
+                                f"━━━━━━━━━━━━━━━━━━\n"
+                                f"**Error:** Trading loop has failed {consecutive_errors} times\n"
+                                f"**Last Error:** {str(e)}\n"
+                                f"**Action:** Bot will continue trying...\n"
+                                f"━━━━━━━━━━━━━━━━━━"
+                            )
+                            await self.notifier.send_message(error_message)
                 
                 # Wait for next interval
                 loop_duration = time.time() - loop_start
@@ -879,19 +973,31 @@ class PaperTrader:
         except KeyboardInterrupt:
             self.logger.logger.info("Trading loop interrupted by user")
             
+            # Send shutdown notification
             if self.notifier and self.notifier.enabled:
-                await self.notifier.send_system_status(status="STOPPED")
+                portfolio_summary = self.position_tracker.get_portfolio_summary(self.last_prices)
+                shutdown_message = (
+                    f"🛑 **Trading Bot Stopped**\n"
+                    f"━━━━━━━━━━━━━━━━━━\n"
+                    f"**Final Portfolio Value:** ${portfolio_summary['portfolio_value']:,.2f}\n"
+                    f"**Total Return:** {portfolio_summary['total_return_pct']:+.2f}%\n"
+                    f"**Total Trades:** {portfolio_summary['total_trades']}\n"
+                    f"**Session Duration:** {datetime.now() - self.performance_history[0]['date'] if self.performance_history else 'N/A'}\n"
+                    f"━━━━━━━━━━━━━━━━━━"
+                )
+                await self.notifier.send_message(shutdown_message)
         
         except Exception as e:
             self.logger.logger.error(f"Trading loop failed: {e}")
             
             if self.notifier and self.notifier.enabled:
-                await self.notifier.send_error_notification(
-                    error_type="TRADING_LOOP_FAILURE",
-                    error_message=str(e)
+                await self.notifier.send_message(
+                    f"💥 **Fatal Error**\n"
+                    f"Trading bot crashed: {str(e)}"
                 )
             
             raise
+
 
 def load_config(config_path: str = "src/config/config.yaml") -> dict:
     """Load configuration from YAML file."""
@@ -903,9 +1009,10 @@ def load_config(config_path: str = "src/config/config.yaml") -> dict:
         print(f"Error loading config: {e}")
         return {}
 
+
 async def main():
     """Main function."""
-    parser = argparse.ArgumentParser(description='Crypto Trading Bot - Paper Trader')
+    parser = argparse.ArgumentParser(description='Enhanced Crypto Trading Bot - Paper Trader V2')
     parser.add_argument('--config', type=str, default='src/config/config.yaml',
                        help='Path to configuration file')
     parser.add_argument('--models-dir', type=str, default='./models',
@@ -925,19 +1032,21 @@ async def main():
     logger = setup_logging(config)
     
     logger.info("=" * 60)
-    logger.info("CRYPTO TRADING BOT - PAPER TRADER")
+    logger.info("ENHANCED CRYPTO TRADING BOT - PAPER TRADER V2")
     logger.info("=" * 60)
     logger.info(f"Models directory: {args.models_dir}")
     logger.info(f"Trading interval: {args.interval} minutes")
+    logger.info("Features: Realistic position tracking, ownership validation, FIFO P&L")
     
-    # Initialize and run paper trader
+    # Initialize and run enhanced paper trader
     try:
-        trader = PaperTrader(config, args.models_dir)
+        trader = EnhancedPaperTrader(config, args.models_dir)
         await trader.run_trading_loop(args.interval)
     
     except Exception as e:
-        logger.error(f"Paper trader failed: {e}")
+        logger.error(f"Enhanced paper trader failed: {e}")
         raise
+
 
 if __name__ == "__main__":
     asyncio.run(main())

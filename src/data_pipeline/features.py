@@ -246,6 +246,10 @@ class FeatureEngine:
         cci_period = self.config.get('cci_period', 20)
         df['cci'] = self._calculate_cci(df, cci_period)
         
+        # ADX (Average Directional Index) - additional feature for 114 total
+        adx_period = self.config.get('adx_period', 14)
+        df['adx'] = self._calculate_adx(df, adx_period)
+        
         return df
     
     def _add_volume_features(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -540,6 +544,48 @@ class FeatureEngine:
         
         return williams_r
     
+    def _calculate_adx(self, df: pd.DataFrame, period: int = 14) -> pd.Series:
+        """Calculate Average Directional Index (ADX) with improved error handling."""
+        # Calculate True Range (already used in ATR)
+        high_low = df['high'] - df['low']
+        high_close = np.abs(df['high'] - df['close'].shift())
+        low_close = np.abs(df['low'] - df['close'].shift())
+        true_range = pd.Series(np.maximum(high_low, np.maximum(high_close, low_close)), index=df.index)
+        
+        # Calculate Directional Movement
+        high_diff = df['high'] - df['high'].shift()
+        low_diff = df['low'].shift() - df['low']
+        
+        # Positive and Negative Directional Movement
+        plus_dm = pd.Series(np.where((high_diff > low_diff) & (high_diff > 0), high_diff, 0), index=df.index)
+        minus_dm = pd.Series(np.where((low_diff > high_diff) & (low_diff > 0), low_diff, 0), index=df.index)
+        
+        # Smooth the values using Wilder's smoothing (similar to EMA with alpha = 1/period)
+        alpha = 1.0 / period
+        
+        # Smoothed True Range
+        atr_smooth = true_range.ewm(alpha=alpha, adjust=False).mean()
+        
+        # Smoothed Directional Movement
+        plus_dm_smooth = plus_dm.ewm(alpha=alpha, adjust=False).mean()
+        minus_dm_smooth = minus_dm.ewm(alpha=alpha, adjust=False).mean()
+        
+        # Directional Indicators
+        plus_di = 100 * (plus_dm_smooth / (atr_smooth + 1e-10))
+        minus_di = 100 * (minus_dm_smooth / (atr_smooth + 1e-10))
+        
+        # Directional Index
+        dx = 100 * (np.abs(plus_di - minus_di) / (plus_di + minus_di + 1e-10))
+        
+        # Average Directional Index
+        adx = dx.ewm(alpha=alpha, adjust=False).mean()
+        
+        # Ensure ADX is within valid range [0, 100] and handle NaN values
+        adx = pd.Series(np.clip(adx, 0, 100), index=adx.index)
+        adx = adx.bfill().fillna(25)  # Fill with neutral value (25 is typical neutral ADX)
+        
+        return adx
+    
     def get_feature_names(self, df: pd.DataFrame) -> List[str]:
         """Get list of all feature column names."""
         # Original OHLCV columns
@@ -621,12 +667,21 @@ class FeatureEngine:
             DataFrame with model-compatible feature count
         """
         expected_counts = {
-            'lightgbm': 105,  # Keep original for backward compatibility
-            'gru': 105,       # Keep original for backward compatibility
-            'ppo': 113        # Market features only (portfolio features added by TradingEnvironment)
+            'lightgbm': 114,  # Updated to match new standard
+            'gru': 114,       # Updated to match GRU model expectations
+            'ppo': 113        # PPO was trained with 113 market features (before ADX was added)
         }
         
         expected = expected_counts.get(model_type, len(self.get_feature_names(df)))
+        
+        # Special handling for PPO: exclude ADX feature to maintain compatibility
+        if model_type == 'ppo':
+            feature_names = self.get_feature_names(df)
+            if 'adx' in feature_names and len(feature_names) == 114:
+                # Remove ADX feature for PPO compatibility
+                df_ppo = df.drop(columns=['adx'])
+                return self.validate_feature_consistency(df_ppo, 113)
+        
         return self.validate_feature_consistency(df, expected)
     
     # Advanced technical indicator calculation methods
