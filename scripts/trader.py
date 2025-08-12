@@ -80,7 +80,20 @@ class UnifiedPaperTrader:
         # Initialize components
         self.feature_engine = FeatureEngine(config.get('features', {}))
         self.preprocessor = DataPreprocessor()
+        # Trading parameters
+        self.symbols = config.get('data', {}).get('symbols', ['BTCEUR'])
+        # Load per-symbol feature metadata for robust alignment
         self.metadata_handler = ModelMetadata()
+        self.symbol_feature_metadata = {}
+        for symbol in self.symbols:
+            metadata_path = os.path.join(self.metadata_handler.metadata_dir, f"features_{symbol}.json")
+            if os.path.exists(metadata_path):
+                with open(metadata_path, "r") as f:
+                    meta = json.load(f)
+                    self.symbol_feature_metadata[symbol] = meta["feature_names"]
+            else:
+                self.logger.logger.warning(f"No feature metadata found for {symbol}, using engine default.")
+                self.symbol_feature_metadata[symbol] = self.feature_engine.get_feature_names(pd.DataFrame())
         
         # Initialize notification system
         try:
@@ -107,9 +120,6 @@ class UnifiedPaperTrader:
         self.models = {}  # symbol -> {'gru': model, 'lightgbm': model, 'ppo': model}
         self.preprocessors = {}  # symbol -> preprocessor
         self.load_all_models()
-        
-        # Trading parameters
-        self.symbols = config.get('data', {}).get('symbols', ['BTCEUR'])
         
         # Symbol-specific thresholds
         self.symbol_thresholds = {
@@ -382,59 +392,46 @@ class UnifiedPaperTrader:
     def generate_signals(self, market_data: dict) -> dict:
         """Generate trading signals using per-symbol models."""
         signals = {}
-        
         self.logger.logger.info(f"Generating signals for {len(market_data)} symbols")
-        
         for symbol, df in market_data.items():
             try:
                 signal = 0  # Default: hold
-                
                 if symbol not in self.models or not self.models[symbol]:
                     self.logger.logger.warning(f"No models available for {symbol}")
                     signals[symbol] = signal
                     continue
-                
-                # Get features using the same feature names as in training
-                feature_names = self.feature_engine.get_feature_names(df)
-                features = df[feature_names].copy()
-                
+                # Use feature names from metadata for this symbol
+                feature_names = self.symbol_feature_metadata.get(symbol, self.feature_engine.get_feature_names(df))
+                # Align features: add missing columns, order, fill missing with 0
+                features = df.reindex(columns=feature_names, fill_value=0).copy()
                 # Final NaN check and cleaning
                 features = features.ffill().bfill().fillna(0)
-                
                 if features.empty:
                     self.logger.logger.warning(f"No valid features for {symbol}")
                     signals[symbol] = signal
                     continue
-                
                 # Generate predictions from each available model
                 predictions = []
-                
                 # GRU prediction
                 if 'gru' in self.models[symbol]:
                     gru_pred = self._get_gru_prediction(symbol, features)
                     if gru_pred is not None:
                         predictions.append(('gru', gru_pred))
-                
                 # LightGBM prediction
                 if 'lightgbm' in self.models[symbol]:
                     lgbm_pred = self._get_lightgbm_prediction(symbol, features)
                     if lgbm_pred is not None:
                         predictions.append(('lightgbm', lgbm_pred))
-                
                 # PPO prediction
                 if 'ppo' in self.models[symbol]:
                     ppo_pred = self._get_ppo_prediction(symbol, features)
                     if ppo_pred is not None:
                         predictions.append(('ppo', ppo_pred))
-                
                 # Combine predictions into signal
                 if predictions:
                     signal = self._combine_predictions(symbol, predictions, df)
-                
                 signals[symbol] = signal
-                
                 self.logger.logger.debug(f"Generated signal for {symbol}: {signal}")
-                
             except Exception as e:
                 self.logger.logger.error(f"Signal generation failed for {symbol}: {e}")
                 signals[symbol] = 0
@@ -521,11 +518,15 @@ class UnifiedPaperTrader:
                 self.logger.logger.debug(f"Insufficient data for PPO sequence: {len(features)} < {sequence_length}")
                 return None
             
+            # Exclude only 'id' from market features for PPO
+            market_features = [col for col in features.columns if col != 'id']
+            features_for_ppo = features[market_features]
+            
             # Scale features using symbol-specific preprocessor
             try:
-                features_scaled = preprocessor.transform(features)
+                features_scaled = preprocessor.transform(features_for_ppo)
             except Exception:
-                features_scaled = preprocessor.fit_transform(features)
+                features_scaled = preprocessor.fit_transform(features_for_ppo)
             
             # Create market observation sequence
             market_sequence = features_scaled[-sequence_length:]
@@ -660,7 +661,10 @@ class UnifiedPaperTrader:
                 position_size = self._calculate_position_size(symbol, current_price, signal)
                 
                 if abs(position_size) < 0.0001:  # Minimum position size
-                    self.logger.logger.debug(f"Position size too small for {symbol}: {position_size}")
+                    if signal != 0:  # Only log if there was actually a signal
+                        current_pos = self.positions.get(symbol, {}).get('amount', 0.0)
+                        self.logger.logger.info(f"Position size too small for {symbol}: {position_size:.6f} "
+                                              f"(signal: {signal}, current_pos: {current_pos:.6f}, price: {current_price:.4f})")
                     continue
                 
                 # Execute trade
@@ -695,10 +699,14 @@ class UnifiedPaperTrader:
             if signal < 0:  # Sell signal
                 # For sells, we can only sell what we own
                 current_position = self.positions.get(symbol, {}).get('amount', 0.0)
-                position_size = min(position_size, current_position)
+                if current_position > 0:
+                    position_size = min(position_size, current_position)
+                else:
+                    # No position to sell, return 0
+                    position_size = 0.0
             
             # Ensure minimum viable trade size
-            min_trade_value = 10.0  # Minimum €10 trade
+            min_trade_value = 5.0  # Minimum €5 trade (lowered for testing)
             min_position_size = min_trade_value / price
             
             if position_size < min_position_size:
@@ -912,7 +920,7 @@ class UnifiedPaperTrader:
                 
                 # Wait before next iteration
                 self.logger.logger.info("Waiting for next iteration...")
-                await asyncio.sleep(300)  # 5 minutes
+                await asyncio.sleep(60)  # 1 minute
                 
         except KeyboardInterrupt:
             self.logger.logger.info("Trading loop interrupted by user")
@@ -954,7 +962,10 @@ async def main():
     if not config:
         print("Failed to load configuration. Exiting.")
         return
-    
+
+    # Setup logging (ensures log file and handlers are created)
+    setup_logging(config)
+
     # Initialize and run trader
     try:
         trader = UnifiedPaperTrader(config, args.models_dir)

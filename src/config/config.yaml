@@ -108,9 +108,9 @@ notifications:
     
 # Logging
 logging:
-  level: "INFO"
+  level: "DEBUG"
   format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-  file: "logs/trading_bot.log"
+  file: "logs/crypto_trading_bot.log"
   max_file_size: "10MB"
   backup_count: 5
 
