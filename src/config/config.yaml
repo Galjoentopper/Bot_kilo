@@ -87,6 +87,36 @@ backtesting:
   test_ratio: 0.15
   walk_forward_steps: 30  # days
   
+# Trainer Defaults (used when CLI flags are not provided)
+trainer:
+  # Cross-validation
+  n_splits: 5           # Purged K-Fold: 5 folds is a common sweet spot
+  embargo: 100          # Embargo periods to mitigate leakage; tune vs horizon
+
+  # Market frictions (basis points)
+  fee_bps: 25.0         # Default applied fee (bps). Overridden by order_type below if set
+  maker_fee_bps: 15.0   # 0.15% maker
+  taker_fee_bps: 25.0   # 0.25% taker
+  order_type: "taker"   # Which fee to apply for evaluation (taker is conservative)
+  slippage_bps: 5.0     # 0.05% conservative slippage assumption
+
+  # Trading objective regularization
+  turnover_lambda: 0.05 # Mild turnover penalty to curb churn
+
+  # Data / target defaults
+  interval: "15m"
+  interval_candidates: ["5m", "15m", "30m", "1h"]
+  target_type: "return"  # return | direction | price
+  default_target_horizon: 1
+  symbols: ["BTCEUR", "ETHEUR", "ADAEUR", "SOLEUR", "XRPEUR"]
+  default_models: ["lightgbm", "gru","ppo"]
+  seed: 42
+
+  # Other
+  cache: true
+  max_workers: 1
+  objective: "sharpe_ratio"
+
 # Performance Metrics
 metrics:
   target_sharpe_ratio: 1.0

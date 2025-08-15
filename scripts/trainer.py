@@ -49,26 +49,28 @@ def main() -> None:
     parser.add_argument('--config', type=str, default='src/config/config.yaml')
     parser.add_argument('--data-dir', type=str, default='./data')
     parser.add_argument('--output-dir', type=str, default='./models')
-    parser.add_argument('--models', type=str, nargs='+', choices=['gru','lightgbm','ppo','all'], default=['all'])
+    parser.add_argument('--models', type=str, nargs='+', choices=['gru','lightgbm','ppo','all'], default=None)
     parser.add_argument('--symbols', type=str, nargs='+', default=None)
-    parser.add_argument('--interval', type=str, default='15m')
-    parser.add_argument('--target-type', type=str, choices=['return','direction','price'], default='return')
-    parser.add_argument('--target-horizon', type=int, default=1)
-    parser.add_argument('--n-splits', type=int, default=5)
-    parser.add_argument('--embargo', type=int, default=100)
-    parser.add_argument('--fee-bps', type=float, default=10.0)
-    parser.add_argument('--slippage-bps', type=float, default=5.0)
-    parser.add_argument('--turnover-lambda', type=float, default=0.0)
-    parser.add_argument('--cache', action='store_true', default=True)
+    parser.add_argument('--interval', type=str, default=None)
+    parser.add_argument('--target-type', type=str, choices=['return','direction','price'], default=None)
+    parser.add_argument('--target-horizon', type=int, default=None)
+    parser.add_argument('--n-splits', type=int, default=None)
+    parser.add_argument('--embargo', type=int, default=None)
+    parser.add_argument('--fee-bps', type=float, default=None)
+    parser.add_argument('--slippage-bps', type=float, default=None)
+    parser.add_argument('--turnover-lambda', type=float, default=None)
+    # Tri-state cache flag: None = use config, True/False if explicitly set
+    parser.set_defaults(cache=None)
+    parser.add_argument('--cache', action='store_true')
     parser.add_argument('--no-cache', dest='cache', action='store_false')
-    parser.add_argument('--max-workers', type=int, default=1)
-    parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--max-workers', type=int, default=None)
+    parser.add_argument('--objective', type=str, choices=['sharpe_ratio','sortino_ratio','calmar_ratio','profit_factor'], default=None)
+    parser.add_argument('--seed', type=int, default=None)
     parser.add_argument('--experiment-name', type=str, default=None)
     parser.add_argument('--verbose', action='store_true')
 
     args = parser.parse_args()
 
-    np.random.seed(args.seed)
     config = load_config(args.config)
     if not config:
         print("Failed to load configuration. Exiting.")
@@ -99,27 +101,84 @@ def main() -> None:
     if not available_symbols:
         logger.error('No data available for training!')
         return
-    symbols_to_train = args.symbols or available_symbols
+    # Resolve trainer defaults from config when CLI not provided
+    trainer_cfg = config.get('trainer', {}) if isinstance(config, dict) else {}
+    symbols_default = trainer_cfg.get('symbols') if isinstance(trainer_cfg.get('symbols'), list) else None
+    symbols_to_train = args.symbols or symbols_default or available_symbols
     symbols_to_train = [s for s in symbols_to_train if s in available_symbols]
 
     if args.experiment_name is None:
         args.experiment_name = f"unified_training_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
-    # CV splitter and metrics
-    cv_splitter = PurgedTimeSeriesSplit(n_splits=args.n_splits, gap=args.embargo, embargo=args.embargo)
-    metrics_calc = TradingMetrics(fee_bps=args.fee_bps, slippage_bps=args.slippage_bps)
+    # Resolve trainer defaults from config when CLI not provided (continued)
+    interval = args.interval or trainer_cfg.get('interval', '15m')
+    target_type = args.target_type or trainer_cfg.get('target_type', 'return')
+    target_horizon = args.target_horizon if args.target_horizon is not None else int(trainer_cfg.get('default_target_horizon', 1))
+    n_splits = args.n_splits if args.n_splits is not None else int(trainer_cfg.get('n_splits', 5))
+    embargo = args.embargo if args.embargo is not None else int(trainer_cfg.get('embargo', 100))
+    fee_bps = args.fee_bps if args.fee_bps is not None else float(trainer_cfg.get('fee_bps', 10.0))
+    slippage_bps = args.slippage_bps if args.slippage_bps is not None else float(trainer_cfg.get('slippage_bps', 5.0))
+    turnover_lambda = args.turnover_lambda if args.turnover_lambda is not None else float(trainer_cfg.get('turnover_lambda', 0.05))
+    max_workers = args.max_workers if args.max_workers is not None else int(trainer_cfg.get('max_workers', 1))
+    objective = args.objective or trainer_cfg.get('objective', 'sharpe_ratio')
+    cache = args.cache if args.cache is not None else bool(trainer_cfg.get('cache', True))
+    seed = args.seed if args.seed is not None else int(trainer_cfg.get('seed', 42))
 
-    model_list = args.models if args.models != ['all'] else ['gru','lightgbm','ppo']
+    # Apply random seeds
+    try:
+        import random
+        random.seed(seed)
+    except Exception:
+        pass
+    try:
+        np.random.seed(seed)
+    except Exception:
+        pass
+    # Optional: seed torch/lightgbm/sb3 if installed
+    try:
+        import torch
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+    except Exception:
+        pass
+    try:
+        import lightgbm as lgb
+        # LightGBM uses seed in params; adapters should pass this seed
+        os.environ.setdefault('LGBM_RAND_SEED', str(seed))
+    except Exception:
+        pass
+
+    # If using maker/taker fees and no CLI fee override, pick from order_type
+    if args.fee_bps is None:
+        order_type = str(trainer_cfg.get('order_type', '')).lower()
+        maker_fee = float(trainer_cfg.get('maker_fee_bps', fee_bps))
+        taker_fee = float(trainer_cfg.get('taker_fee_bps', fee_bps))
+        if order_type in ('maker', 'taker'):
+            fee_bps = maker_fee if order_type == 'maker' else taker_fee
+
+    logger.info(f"Trainer settings: interval={interval}, target={target_type}, splits={n_splits}, embargo={embargo}, fees={fee_bps}bps, slippage={slippage_bps}bps, turnover_lambda={turnover_lambda}, cache={cache}, objective={objective}, max_workers={max_workers}")
+
+    # CV splitter and metrics
+    cv_splitter = PurgedTimeSeriesSplit(n_splits=n_splits, gap=embargo, embargo=embargo)
+    metrics_calc = TradingMetrics(fee_bps=fee_bps, slippage_bps=slippage_bps)
+
+    default_models = trainer_cfg.get('default_models')
+    if args.models is None:
+        model_list = default_models if isinstance(default_models, list) else ['lightgbm','gru']
+    else:
+        model_list = ['gru','lightgbm','ppo'] if args.models == ['all'] else args.models
 
     for symbol in symbols_to_train:
         logger.info(f"==== Training {symbol} ====")
         try:
             X, y, timestamps, feature_names, metadata = dataset_builder.build_dataset(
                 symbol=symbol,
-                interval=args.interval,
-                use_cache=args.cache,
-                target_type=args.target_type,
-                target_horizon=args.target_horizon
+                interval=interval,
+                use_cache=cache,
+                target_type=target_type,
+                target_horizon=target_horizon
             )
         except Exception as e:
             logger.error(f"Dataset build failed for {symbol}: {e}")
@@ -132,7 +191,7 @@ def main() -> None:
 
         for model_type in model_list:
             try:
-                task_type = 'classification' if args.target_type == 'direction' else 'regression'
+                task_type = 'classification' if target_type == 'direction' else 'regression'
                 adapter = create_model_adapter(model_type, config, task_type)
 
                 cv_results = []
@@ -140,7 +199,7 @@ def main() -> None:
                 saved_threshold = None
 
                 for fold_idx, (train_idx, val_idx) in enumerate(cv_splitter.split(X, y)):
-                    logger.info(f"{model_type} fold {fold_idx+1}/{args.n_splits}")
+                    logger.info(f"{model_type} fold {fold_idx+1}/{n_splits}")
                     if model_type == 'ppo':
                         fold_results = adapter.fit(
                             X=metadata.get('full_data', X),
@@ -176,9 +235,9 @@ def main() -> None:
                                 y_proba=y_prob_cal,
                                 prices=prices[val_idx],
                                 metrics_calculator=metrics_calc,
-                                turnover_lambda=args.turnover_lambda,
+                                turnover_lambda=turnover_lambda,
                                 asymmetric=True,
-                                objective='sharpe_ratio'
+                                objective=objective
                             )
                             fold_results['optimal_threshold'] = best
                             fold_results['threshold_scan'] = by
