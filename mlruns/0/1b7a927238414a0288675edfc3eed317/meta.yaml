@@ -1,5 +1,5 @@
 artifact_uri: file:///notebooks/Bot_kilo/mlruns/0/1b7a927238414a0288675edfc3eed317/artifacts
-end_time: null
+end_time: 1755263854423
 entry_point_name: ''
 experiment_id: '0'
 lifecycle_stage: active
@@ -9,6 +9,6 @@ source_name: ''
 source_type: 4
 source_version: ''
 start_time: 1755263799500
-status: 1
+status: 3
 tags: []
 user_id: root
