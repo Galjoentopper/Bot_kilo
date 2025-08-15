@@ -41,6 +41,54 @@ def load_config(config_path: str = "src/config/config.yaml") -> Dict[str, Any]:
         return {}
 
 
+def _make_jsonable(value: Any) -> Any:
+    """Convert common non-JSON-serializable types into JSON-safe structures."""
+    try:
+        import numpy as _np  # local alias to avoid shadowing
+        from datetime import datetime as _dt
+    except Exception:
+        _np = None
+        _dt = None
+
+    # Scalars
+    if _np is not None and isinstance(value, _np.generic):
+        return value.item()
+    if isinstance(value, (int, float, str, bool)) or value is None:
+        return value
+    # Datetime
+    if _dt is not None and isinstance(value, _dt):
+        return value.isoformat()
+    # Numpy arrays
+    if _np is not None and isinstance(value, _np.ndarray):
+        # Be cautious with huge arrays; convert to list
+        return value.tolist()
+    # Lists / tuples
+    if isinstance(value, (list, tuple)):
+        return [_make_jsonable(v) for v in value]
+    # Dicts
+    if isinstance(value, dict):
+        return {k: _make_jsonable(v) for k, v in value.items()}
+    # Fallback: best-effort string
+    try:
+        json.dumps(value)  # type: ignore[arg-type]
+        return value
+    except Exception:
+        return str(value)
+
+
+def _sanitize_results(res: Dict[str, Any]) -> Dict[str, Any]:
+    """Drop or convert non-serializable fields from training result dicts."""
+    if not isinstance(res, dict):
+        return {}
+    blacklist = {"model", "model_state", "feature_importance"}
+    out: Dict[str, Any] = {}
+    for k, v in res.items():
+        if k in blacklist:
+            continue
+        out[k] = _make_jsonable(v)
+    return out
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description='Unified Enhanced Trainer',
@@ -112,7 +160,11 @@ def main() -> None:
         args.experiment_name = f"unified_training_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
     # Resolve trainer defaults from config when CLI not provided (continued)
-    interval = args.interval or trainer_cfg.get('interval', '15m')
+    interval = (
+        args.interval
+        or trainer_cfg.get('interval')
+        or (config.get('data', {}) or {}).get('interval', '15m')
+    )
     target_type = args.target_type or trainer_cfg.get('target_type', 'return')
     target_horizon = args.target_horizon if args.target_horizon is not None else int(trainer_cfg.get('default_target_horizon', 1))
     n_splits = args.n_splits if args.n_splits is not None else int(trainer_cfg.get('n_splits', 5))
@@ -300,7 +352,7 @@ def main() -> None:
                 with open(os.path.join(saved_path, 'features.json'), 'w') as f:
                     json.dump({'feature_names': list(getattr(X, 'columns', [])), 'feature_count': int(getattr(X, 'shape', [0,0])[1])}, f, indent=2)
                 with open(os.path.join(saved_path, 'cv_results.json'), 'w') as f:
-                    json.dump(cv_results, f, indent=2)
+                    json.dump([_sanitize_results(r) for r in cv_results], f, indent=2)
                 if calibrators:
                     for i, cal in enumerate(calibrators):
                         cal.save(os.path.join(saved_path, f'calibrator_fold{i}'))
