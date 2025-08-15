@@ -116,6 +116,8 @@ trainer:
   cache: true
   max_workers: 1
   objective: "sharpe_ratio"
+  # Prefer explicit start date over lookback years
+  start_date: "2023-01-01"
 
 # Performance Metrics
 metrics:

@@ -13,7 +13,7 @@ import argparse
 import yaml
 import json
 import shutil
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 import numpy as np
@@ -67,6 +67,7 @@ def main() -> None:
     parser.add_argument('--objective', type=str, choices=['sharpe_ratio','sortino_ratio','calmar_ratio','profit_factor'], default=None)
     parser.add_argument('--seed', type=int, default=None)
     parser.add_argument('--experiment-name', type=str, default=None)
+    parser.add_argument('--start-date', type=str, default=None)
     parser.add_argument('--verbose', action='store_true')
 
     args = parser.parse_args()
@@ -123,6 +124,12 @@ def main() -> None:
     objective = args.objective or trainer_cfg.get('objective', 'sharpe_ratio')
     cache = args.cache if args.cache is not None else bool(trainer_cfg.get('cache', True))
     seed = args.seed if args.seed is not None else int(trainer_cfg.get('seed', 42))
+    # Explicit start_date support
+    start_date = (
+        args.start_date
+        or trainer_cfg.get('start_date')
+        or (config.get('data', {}) or {}).get('start_date')
+    )
 
     # Apply random seeds
     try:
@@ -158,7 +165,7 @@ def main() -> None:
         if order_type in ('maker', 'taker'):
             fee_bps = maker_fee if order_type == 'maker' else taker_fee
 
-    logger.info(f"Trainer settings: interval={interval}, target={target_type}, splits={n_splits}, embargo={embargo}, fees={fee_bps}bps, slippage={slippage_bps}bps, turnover_lambda={turnover_lambda}, cache={cache}, objective={objective}, max_workers={max_workers}")
+    logger.info(f"Trainer settings: interval={interval}, target={target_type}, splits={n_splits}, embargo={embargo}, fees={fee_bps}bps, slippage={slippage_bps}bps, turnover_lambda={turnover_lambda}, cache={cache}, objective={objective}, max_workers={max_workers}, start_date={start_date}")
 
     # CV splitter and metrics
     cv_splitter = PurgedTimeSeriesSplit(n_splits=n_splits, gap=embargo, embargo=embargo)
@@ -178,7 +185,8 @@ def main() -> None:
                 interval=interval,
                 use_cache=cache,
                 target_type=target_type,
-                target_horizon=target_horizon
+                target_horizon=target_horizon,
+                start_date=start_date
             )
         except Exception as e:
             logger.error(f"Dataset build failed for {symbol}: {e}")
