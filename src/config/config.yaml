@@ -4,7 +4,7 @@
 # Data Configuration
 data:
   symbols: ["BTCEUR", "SOLEUR", "ADAEUR", "XRPEUR", "ETHEUR"]
-  interval: "15m"
+  interval: "30m"
   data_dir: "./data"
   start_date: "2020-01-01"
   

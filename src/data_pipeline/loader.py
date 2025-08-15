@@ -12,7 +12,6 @@ import pandas as pd
 import numpy as np
 from typing import Dict, List, Optional, Tuple, Union
 import logging
-from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +30,7 @@ class DataLoader:
         """
         self.data_dir = data_dir
         self.symbols = ["BTCEUR", "ETHEUR", "ADAEUR", "SOLEUR", "XRPEUR"]
+        # Base interval of stored DBs (observed in repo)
         self.interval = "15m"
         
         # Validate data directory
@@ -39,13 +39,15 @@ class DataLoader:
         
         logger.info(f"DataLoader initialized with data_dir: {data_dir}")
     
-    def get_db_path(self, symbol: str) -> str:
-        """Get database path for symbol."""
-        return os.path.join(self.data_dir, f"{symbol.lower()}_{self.interval}.db")
+    def get_db_path(self, symbol: str, interval: Optional[str] = None) -> str:
+        """Get database path for symbol and interval."""
+        iv = (interval or self.interval).lower()
+        return os.path.join(self.data_dir, f"{symbol.lower()}_{iv}.db")
     
     def load_symbol_data(
         self, 
-        symbol: str, 
+        symbol: str,
+        interval: Optional[str] = None,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
         limit: Optional[int] = None
@@ -55,6 +57,7 @@ class DataLoader:
         
         Args:
             symbol: Trading symbol (e.g., 'BTCEUR')
+            interval: Time interval (e.g., '15m','30m','1h'); falls back to base interval with resampling if needed
             start_date: Start date in 'YYYY-MM-DD' format
             end_date: End date in 'YYYY-MM-DD' format
             limit: Maximum number of records to load
@@ -62,15 +65,22 @@ class DataLoader:
         Returns:
             DataFrame with OHLCV data
         """
-        db_path = self.get_db_path(symbol)
+        request_interval = (interval or self.interval).lower()
+        db_path = self.get_db_path(symbol, request_interval)
         
+        # Fallback to base interval DB if requested DB is missing
+        used_base_interval = False
         if not os.path.exists(db_path):
-            raise FileNotFoundError(f"Database not found for {symbol}: {db_path}")
+            base_db_path = self.get_db_path(symbol, self.interval)
+            if not os.path.exists(base_db_path):
+                raise FileNotFoundError(f"Database not found for {symbol}: {db_path}")
+            db_path = base_db_path
+            used_base_interval = True
         
         # Build query
         query = "SELECT * FROM market_data"
-        params = []
-        conditions = []
+        params: List[Union[str, int, float]] = []
+        conditions: List[str] = []
         
         if start_date:
             conditions.append("datetime >= ?")
@@ -85,13 +95,10 @@ class DataLoader:
         
         query += " ORDER BY timestamp"
         
-        if limit:
-            query += f" LIMIT {limit}"
-        
         # Load data
         try:
             conn = sqlite3.connect(db_path)
-            df = pd.read_sql_query(query, conn, params=params)
+            df = pd.read_sql_query(query, conn, params=tuple(params))
             conn.close()
             
             if df.empty:
@@ -99,8 +106,14 @@ class DataLoader:
                 return df
             
             # Convert datetime column
-            df['datetime'] = pd.to_datetime(df['datetime'])
-            df = df.set_index('datetime')
+            if 'datetime' in df.columns:
+                df['datetime'] = pd.to_datetime(df['datetime'])
+                df = df.set_index('datetime')
+            elif 'timestamp' in df.columns:
+                df['datetime'] = pd.to_datetime(df['timestamp'], unit='s')
+                df = df.set_index('datetime')
+            else:
+                raise ValueError("Expected 'datetime' or 'timestamp' column in DB")
             
             # Ensure numeric columns
             numeric_cols = ['open', 'high', 'low', 'close', 'volume', 
@@ -112,7 +125,31 @@ class DataLoader:
             # Remove any NaN values
             df = df.dropna()
             
-            logger.info(f"Loaded {len(df)} records for {symbol}")
+            # Resample if we used base interval and requested a different interval
+            if used_base_interval and request_interval != self.interval:
+                rule = self._interval_to_rule(request_interval)
+                if rule:
+                    series_map: Dict[str, pd.Series] = {}
+                    if 'open' in df.columns:
+                        series_map['open'] = df['open'].resample(rule).first()
+                    if 'high' in df.columns:
+                        series_map['high'] = df['high'].resample(rule).max()
+                    if 'low' in df.columns:
+                        series_map['low'] = df['low'].resample(rule).min()
+                    if 'close' in df.columns:
+                        series_map['close'] = df['close'].resample(rule).last()
+                    if 'volume' in df.columns:
+                        series_map['volume'] = df['volume'].resample(rule).sum()
+                    if 'quote_volume' in df.columns:
+                        series_map['quote_volume'] = df['quote_volume'].resample(rule).sum()
+                    if 'taker_buy_base' in df.columns:
+                        series_map['taker_buy_base'] = df['taker_buy_base'].resample(rule).sum()
+                    if 'taker_buy_quote' in df.columns:
+                        series_map['taker_buy_quote'] = df['taker_buy_quote'].resample(rule).sum()
+                    if series_map:
+                        df = pd.concat(series_map, axis=1).dropna(how='any')
+            
+            logger.info(f"Loaded {len(df)} records for {symbol} at interval {request_interval}")
             return df
             
         except Exception as e:
@@ -141,10 +178,10 @@ class DataLoader:
         if symbols is None:
             symbols = self.symbols
         
-        data = {}
+        data: Dict[str, pd.DataFrame] = {}
         for symbol in symbols:
             try:
-                df = self.load_symbol_data(symbol, start_date, end_date, limit)
+                df = self.load_symbol_data(symbol)
                 if not df.empty:
                     data[symbol] = df
                 else:
@@ -211,7 +248,7 @@ class DataLoader:
     
     def get_all_summaries(self) -> Dict[str, Dict]:
         """Get summary statistics for all symbols."""
-        summaries = {}
+        summaries: Dict[str, Dict] = {}
         for symbol in self.symbols:
             summaries[symbol] = self.get_data_summary(symbol)
         return summaries
@@ -270,25 +307,26 @@ class DataLoader:
         Returns:
             Dictionary mapping symbol to availability status
         """
-        availability = {}
+        availability: Dict[str, bool] = {}
         for symbol in self.symbols:
             db_path = self.get_db_path(symbol)
             availability[symbol] = os.path.exists(db_path)
         
         return availability
     
-    def validate_data_integrity(self, symbol: str) -> Dict[str, Union[bool, str, int, float]]:
+    def validate_data_integrity(self, symbol: str, interval: Optional[str] = None) -> Dict[str, Union[bool, str, int, float]]:
         """
         Validate data integrity for a symbol.
         
         Args:
             symbol: Trading symbol to validate
+            interval: Time interval for data
             
         Returns:
             Dictionary with validation results
         """
         try:
-            df = self.load_symbol_data(symbol)
+            df = self.load_symbol_data(symbol, interval=interval)
             
             if df.empty:
                 return {"valid": False, "error": "No data found"}
@@ -308,8 +346,10 @@ class DataLoader:
             # Check for gaps in data
             df_sorted = df.sort_index()
             time_diffs = df_sorted.index.to_series().diff()
-            expected_diff = pd.Timedelta(minutes=15)  # 15-minute intervals
-            irregular_intervals = (abs(time_diffs - expected_diff) > pd.Timedelta(minutes=1)).sum()
+            expected_diff = self._interval_to_timedelta(interval)
+            time_diffs_seconds = time_diffs.dt.total_seconds().fillna(0)
+            expected_sec = expected_diff.total_seconds()
+            irregular_intervals = int((np.abs(time_diffs_seconds - expected_sec) > 60).sum())
             
             return {
                 "valid": True,
@@ -323,3 +363,31 @@ class DataLoader:
             
         except Exception as e:
             return {"valid": False, "error": str(e)}
+    
+    def _interval_to_timedelta(self, interval: Optional[str] = None) -> pd.Timedelta:
+        """Convert interval string like '15m' or '1h' to pandas Timedelta."""
+        iv = (interval or self.interval or '15m').strip().lower()
+        try:
+            if iv.endswith('m'):
+                return pd.Timedelta(minutes=int(iv[:-1]))
+            if iv.endswith('h'):
+                return pd.Timedelta(hours=int(iv[:-1]))
+            if iv.endswith('d'):
+                return pd.Timedelta(days=int(iv[:-1]))
+        except Exception:
+            pass
+        return pd.Timedelta(minutes=15)
+    
+    def _interval_to_rule(self, interval: Optional[str] = None) -> Optional[str]:
+        """Convert interval like '15m'/'30m'/'1h' to pandas resample rule ('15T','30T','1H')."""
+        iv = (interval or self.interval or '15m').strip().lower()
+        try:
+            if iv.endswith('m'):
+                return f"{int(iv[:-1])}T"
+            if iv.endswith('h'):
+                return f"{int(iv[:-1])}H"
+            if iv.endswith('d'):
+                return f"{int(iv[:-1])}D"
+        except Exception:
+            return None
+        return None

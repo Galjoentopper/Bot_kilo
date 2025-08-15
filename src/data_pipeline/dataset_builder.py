@@ -117,7 +117,7 @@ class DatasetBuilder:
         
         # Load raw data
         logger.info(f"Loading raw data for {symbol}")
-        df = self.data_loader.load_symbol_data(symbol, interval)
+        df = self.data_loader.load_symbol_data(symbol, interval=interval)
         
         if df is None or df.empty:
             raise ValueError(f"No data available for {symbol}")
