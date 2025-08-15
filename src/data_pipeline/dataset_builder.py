@@ -46,14 +46,14 @@ class DatasetBuilder:
         self.data_dir = data_dir
         self.cache_dir = cache_dir
         self.config = config or {}
-        
+
         # Initialize components
         self.data_loader = DataLoader(data_dir)
-        self.feature_engine = FeatureEngine(config.get('features', {}))
-        
+        self.feature_engine = FeatureEngine(self.config.get('features', {}))
+
         # Create cache directory if it doesn't exist
         os.makedirs(cache_dir, exist_ok=True)
-        
+
         logger.info(f"DatasetBuilder initialized with cache at {cache_dir}")
     
     def build_dataset(
@@ -102,7 +102,11 @@ class DatasetBuilder:
                 # Extract components
                 feature_names = metadata['feature_names']
                 X = features_df[feature_names]
-                y = features_df['target'].values if 'target' in features_df else None
+                if 'target' in features_df:
+                    y = features_df['target'].to_numpy()
+                else:
+                    logger.warning("Cached features missing 'target' column; using zeros as placeholder target.")
+                    y = np.zeros(len(features_df), dtype=float)
                 timestamps = pd.to_datetime(features_df.index)
                 
                 logger.info(f"Loaded {len(X)} samples from cache")
@@ -154,12 +158,24 @@ class DatasetBuilder:
         # Extract components
         X = features_df[feature_names]
         timestamps = pd.to_datetime(features_df.index)
+
+        # Align raw close prices for downstream cost-aware metrics/thresholding
+        try:
+            prices_aligned = df['close'].iloc[:min_len].astype(float).values
+        except Exception:
+            # Fallback: try typical OHLCV naming
+            price_col = next((c for c in df.columns if c.lower() in ("close", "Close")), None)
+            prices_aligned = df[price_col].iloc[:min_len].astype(float).values if price_col else np.asarray([])
         
         # Create metadata
         metadata = self._create_metadata(
             symbol, interval, feature_names, X, y,
             target_type, target_horizon, cache_key
         )
+
+        # Inject prices (serializable) for later threshold optimization
+        prices_aligned = np.asarray(prices_aligned)
+        metadata['prices'] = prices_aligned.tolist() if prices_aligned.size > 0 else []
         
         # Save to cache
         if use_cache:
