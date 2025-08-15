@@ -108,6 +108,22 @@ class DatasetBuilder:
                     logger.warning("Cached features missing 'target' column; using zeros as placeholder target.")
                     y = np.zeros(len(features_df), dtype=float)
                 timestamps = pd.to_datetime(features_df.index)
+
+                # Reconstruct runtime raw OHLCV data for PPO and downstream consumers
+                try:
+                    raw_df = self.data_loader.load_symbol_data(symbol, interval=interval)
+                    if raw_df is not None and not raw_df.empty:
+                        # Apply date filters to raw data to match cached features
+                        if start_date:
+                            raw_df = raw_df[raw_df.index >= pd.to_datetime(start_date)]
+                        if end_date:
+                            raw_df = raw_df[raw_df.index <= pd.to_datetime(end_date)]
+                        # Align to feature index
+                        raw_df = raw_df.reindex(features_df.index).dropna(how='all')
+                        # Attach non-serializable runtime section
+                        metadata.setdefault('_runtime', {})['full_data'] = raw_df
+                except Exception as e:
+                    logger.warning(f"Failed to reconstruct runtime raw data for {symbol}: {e}")
                 
                 logger.info(f"Loaded {len(X)} samples from cache")
                 return X, y, timestamps, feature_names, metadata
@@ -176,14 +192,25 @@ class DatasetBuilder:
         # Inject prices (serializable) for later threshold optimization
         prices_aligned = np.asarray(prices_aligned)
         metadata['prices'] = prices_aligned.tolist() if prices_aligned.size > 0 else []
+
+        # Attach non-serializable runtime raw data for PPO
+        try:
+            runtime_df = df.reindex(features_df.index).iloc[:min_len]
+            metadata['_runtime'] = {'full_data': runtime_df}
+        except Exception:
+            pass
         
         # Save to cache
         if use_cache:
             try:
                 logger.info(f"Saving features to cache: {cache_path}")
                 features_df.to_parquet(cache_path, compression='snappy')
+                # Remove non-serializable runtime section before saving
+                metadata_to_save = dict(metadata)
+                if '_runtime' in metadata_to_save:
+                    metadata_to_save.pop('_runtime', None)
                 with open(metadata_path, 'w') as f:
-                    json.dump(metadata, f, indent=2)
+                    json.dump(metadata_to_save, f, indent=2)
             except Exception as e:
                 logger.warning(f"Failed to save cache: {e}")
         

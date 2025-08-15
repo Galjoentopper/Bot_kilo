@@ -177,6 +177,17 @@ def main() -> None:
     else:
         model_list = ['gru','lightgbm','ppo'] if args.models == ['all'] else args.models
 
+    # Notify start of training (after model_list is known)
+    if notifier and getattr(notifier, 'enabled', False):
+        try:
+            symbols_preview = ", ".join(symbols_to_train)
+            models_preview = ", ".join(model_list)
+            notifier.send_message_sync(
+                f"🚀 <b>Training started</b>\n<b>Symbols:</b> {symbols_preview}\n<b>Models:</b> {models_preview}\n<b>Interval:</b> {interval}\n<b>Start:</b> {start_date or 'full history'}"
+            )
+        except Exception:
+            pass
+
     for symbol in symbols_to_train:
         logger.info(f"==== Training {symbol} ====")
         try:
@@ -209,8 +220,10 @@ def main() -> None:
                 for fold_idx, (train_idx, val_idx) in enumerate(cv_splitter.split(X, y)):
                     logger.info(f"{model_type} fold {fold_idx+1}/{n_splits}")
                     if model_type == 'ppo':
+                        # Use raw OHLCV data for PPO if available
+                        ppo_X = metadata.get('_runtime', {}).get('full_data', metadata.get('full_data', X))
                         fold_results = adapter.fit(
-                            X=metadata.get('full_data', X),
+                            X=ppo_X,
                             y=y,
                             train_idx=train_idx,
                             valid_idx=val_idx,
@@ -260,8 +273,9 @@ def main() -> None:
                 val_idx_final = np.arange(int(n*0.8), n)
 
                 if model_type == 'ppo':
+                    ppo_X_final = metadata.get('_runtime', {}).get('full_data', metadata.get('full_data', X))
                     final_results = final_adapter.fit(
-                        X=metadata.get('full_data', X),
+                        X=ppo_X_final,
                         y=y,
                         train_idx=train_idx_final,
                         valid_idx=val_idx_final,
@@ -308,10 +322,32 @@ def main() -> None:
                         f.write(saved_path)
 
                 logger.info(f"Saved {model_type} artifacts to {saved_path}")
+                # Notify model completion
+                if notifier and getattr(notifier, 'enabled', False):
+                    try:
+                        notifier.send_message_sync(
+                            f"✅ <b>{model_type.upper()} trained</b> for <b>{symbol}</b>\nArtifacts: {os.path.basename(saved_path)}"
+                        )
+                    except Exception:
+                        pass
 
             except Exception as e:
                 logger.error(f"Failed training {model_type} for {symbol}: {e}")
+                if notifier and getattr(notifier, 'enabled', False):
+                    try:
+                        notifier.send_message_sync(
+                            f"🚨 <b>Training error</b>\n<b>Symbol:</b> {symbol}\n<b>Model:</b> {model_type}\n<b>Message:</b> {str(e)}"
+                        )
+                    except Exception:
+                        pass
                 continue
+
+    # Notify completion
+    if notifier and getattr(notifier, 'enabled', False):
+        try:
+            notifier.send_message_sync("🏁 <b>Training run completed</b>")
+        except Exception:
+            pass
 
 
 if __name__ == '__main__':
