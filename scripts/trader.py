@@ -62,6 +62,40 @@ class ModelMetadata:
                 return json.load(f)
         return None
 
+    def discover_feature_names(self, symbol: str, desired_interval: Optional[str] = None, logger: Optional[Any] = None) -> Optional[List[str]]:
+        """Load feature_names from models/metadata/{SYMBOL}_*_metadata.json.
+
+        If multiple files exist, prefer ones matching desired_interval, else pick the most recent.
+        Returns list of feature names or None.
+        """
+        try:
+            import glob
+            # Prefer interval-specific files if provided
+            candidates: List[str] = []
+            if desired_interval:
+                pattern_specific = os.path.join(self.metadata_dir, f"{symbol}_{desired_interval}_*_metadata.json")
+                candidates = glob.glob(pattern_specific)
+            if not candidates:
+                pattern_any = os.path.join(self.metadata_dir, f"{symbol}_*_metadata.json")
+                candidates = glob.glob(pattern_any)
+            if not candidates:
+                return None
+
+            # Choose most recent
+            chosen = max(candidates, key=os.path.getmtime)
+            with open(chosen, 'r') as f:
+                data = json.load(f)
+            features = data.get('feature_names')
+            if isinstance(features, list) and features:
+                if logger:
+                    logger.info(f"Loaded feature metadata for {symbol} from {os.path.basename(chosen)} ({len(features)} features)")
+                return features
+            return None
+        except Exception as e:
+            if logger:
+                logger.warning(f"Failed discovering feature metadata for {symbol}: {e}")
+            return None
+
 
 class UnifiedPaperTrader:
     """
@@ -82,18 +116,45 @@ class UnifiedPaperTrader:
         self.preprocessor = DataPreprocessor()
         # Trading parameters
         self.symbols = config.get('data', {}).get('symbols', ['BTCEUR'])
+        # Resolve interval from config (trainer takes precedence)
+        self.interval = (
+            config.get('trainer', {}).get('interval')
+            or config.get('data', {}).get('interval')
+            or '15m'
+        )
+        # Loop cadence (can differ from data/model timeframe)
+        self.loop_interval = (
+            config.get('trading', {}).get('loop_interval')
+            or self.interval
+            or '15m'
+        )
         # Load per-symbol feature metadata for robust alignment
         self.metadata_handler = ModelMetadata()
         self.symbol_feature_metadata = {}
+        # Resolve interval from config to prefer matching metadata files
+        desired_interval = (
+            config.get('trainer', {}).get('interval')
+            or config.get('data', {}).get('interval')
+            or None
+        )
         for symbol in self.symbols:
             metadata_path = os.path.join(self.metadata_handler.metadata_dir, f"features_{symbol}.json")
             if os.path.exists(metadata_path):
-                with open(metadata_path, "r") as f:
-                    meta = json.load(f)
-                    self.symbol_feature_metadata[symbol] = meta["feature_names"]
+                try:
+                    with open(metadata_path, "r") as f:
+                        meta = json.load(f)
+                        self.symbol_feature_metadata[symbol] = meta.get("feature_names", [])
+                except Exception as e:
+                    self.logger.logger.warning(f"Failed to load feature metadata for {symbol}: {e}")
+                    self.symbol_feature_metadata[symbol] = self.feature_engine.get_feature_names(pd.DataFrame())
             else:
-                self.logger.logger.warning(f"No feature metadata found for {symbol}, using engine default.")
-                self.symbol_feature_metadata[symbol] = self.feature_engine.get_feature_names(pd.DataFrame())
+                # Try discovering from models/metadata/{SYMBOL}_*_metadata.json
+                discovered = self.metadata_handler.discover_feature_names(symbol, desired_interval, self.logger.logger)
+                if discovered:
+                    self.symbol_feature_metadata[symbol] = discovered
+                else:
+                    self.logger.logger.warning(f"No feature metadata found for {symbol}, using engine default.")
+                    self.symbol_feature_metadata[symbol] = self.feature_engine.get_feature_names(pd.DataFrame())
         
         # Initialize notification system
         try:
@@ -109,6 +170,11 @@ class UnifiedPaperTrader:
         self.transaction_fee = trading_config.get('transaction_fee', 0.001)
         self.slippage = trading_config.get('slippage', 0.0005)
         self.max_position_size = trading_config.get('max_position_size', 0.1)
+        # Optimization knobs
+        self.model_weights = trading_config.get('model_weights', {'gru': 0.3, 'lightgbm': 0.3, 'ppo': 0.4})
+        self.ppo_scale = trading_config.get('ppo_scale', 0.002)
+        self.min_trade_value = trading_config.get('min_trade_value', 5.0)
+        
         
         # Portfolio state
         self.balance = self.initial_balance
@@ -121,15 +187,25 @@ class UnifiedPaperTrader:
         self.preprocessors = {}  # symbol -> preprocessor
         self.load_all_models()
         
-        # Symbol-specific thresholds
-        self.symbol_thresholds = {
+        # Threshold configuration (tunable)
+        thresholds_cfg = trading_config.get('thresholds', {})
+        self.symbol_thresholds = thresholds_cfg.get('per_symbol', {
             'BTCEUR': 0.00008,
-            'ETHEUR': 0.00008, 
+            'ETHEUR': 0.00008,
             'SOLEUR': 0.00012,
             'ADAEUR': 0.00012,
             'XRPEUR': 0.00012,
-        }
-        self.default_threshold = 0.00010
+        })
+        self.default_threshold = thresholds_cfg.get('default', 0.00010)
+        # Cost floor and volatility scaling knobs
+        self.use_cost_floor = thresholds_cfg.get('use_cost_floor', True)
+        self.cost_floor_multiplier = float(thresholds_cfg.get('cost_floor_multiplier', 1.2))
+        self.vol_reference = float(thresholds_cfg.get('vol_reference', 0.02))  # reference daily vol
+        bounds = thresholds_cfg.get('vol_bounds', [0.5, 2.0])
+        try:
+            self.vol_bounds = (float(bounds[0]), float(bounds[1]))
+        except Exception:
+            self.vol_bounds = (0.5, 2.0)
         
         # Data caching
         self.data_cache = {}
@@ -150,7 +226,8 @@ class UnifiedPaperTrader:
             self.models[symbol] = {}
             
             # Load GRU model
-            gru_path = self._find_latest_model(f'gru_model_{symbol}_*.pth')
+            gru_path = self._find_latest_model(f'gru_model_{symbol}_*.pth') or \
+                       self._find_latest_unified_artifact('gru', symbol, 'model.pth')
             if gru_path:
                 try:
                     self.models[symbol]['gru'] = GRUTrainer.load_model(gru_path, self.config)
@@ -159,7 +236,8 @@ class UnifiedPaperTrader:
                     self.logger.logger.warning(f"Failed to load GRU model for {symbol}: {e}")
             
             # Load LightGBM model
-            lgbm_path = self._find_latest_model(f'lightgbm_model_{symbol}_*.pkl')
+            lgbm_path = self._find_latest_model(f'lightgbm_model_{symbol}_*.pkl') or \
+                        self._find_latest_unified_artifact('lightgbm', symbol, 'model.pkl')
             if lgbm_path:
                 try:
                     self.models[symbol]['lightgbm'] = LightGBMTrainer.load_model(lgbm_path, self.config)
@@ -168,7 +246,8 @@ class UnifiedPaperTrader:
                     self.logger.logger.warning(f"Failed to load LightGBM model for {symbol}: {e}")
             
             # Load PPO model
-            ppo_path = self._find_latest_model(f'ppo_model_{symbol}_*.zip')
+            ppo_path = self._find_latest_model(f'ppo_model_{symbol}_*.zip') or \
+                       self._find_latest_unified_artifact('ppo', symbol, 'model.zip')
             if ppo_path:
                 try:
                     self.models[symbol]['ppo'] = PPOTrainer.load_model(ppo_path, self.config)
@@ -177,14 +256,34 @@ class UnifiedPaperTrader:
                     self.logger.logger.warning(f"Failed to load PPO model for {symbol}: {e}")
             
             # Load preprocessor for this symbol
-            preprocessor_path = self._find_latest_model(f'preprocessor_{symbol}_*.pkl')
+            preprocessor_path = self._find_latest_model(f'preprocessor_{symbol}_*.pkl') or \
+                                 self._find_latest_unified_artifact('gru', symbol, 'preprocessor.pkl')
             if preprocessor_path:
                 try:
+                    # First try standard pickle
                     with open(preprocessor_path, 'rb') as f:
                         self.preprocessors[symbol] = pickle.load(f)
-                    self.logger.logger.info(f"Loaded preprocessor for {symbol}")
-                except Exception as e:
-                    self.logger.logger.warning(f"Failed to load preprocessor for {symbol}: {e}")
+                    self.logger.logger.info(f"Loaded preprocessor for {symbol} from {preprocessor_path}")
+                except Exception as e_pickle:
+                    # If pickle fails, try joblib (common for sklearn pipelines)
+                    try:
+                        import joblib  # type: ignore
+                        self.preprocessors[symbol] = joblib.load(preprocessor_path)
+                        self.logger.logger.info(f"Loaded preprocessor (joblib) for {symbol} from {preprocessor_path}")
+                    except Exception as e_joblib:
+                        # Fall back to fresh preprocessor if artifact is incompatible
+                        self.logger.logger.info(
+                            f"Preprocessor unavailable for {symbol}, using fresh scaler. (path={preprocessor_path}, pickle_error={e_pickle}, joblib_error={e_joblib})"
+                        )
+                        self.preprocessors[symbol] = DataPreprocessor()
+
+                # Validate loaded preprocessor: must expose transform and fit/fit_transform
+                pre = self.preprocessors.get(symbol)
+                if not hasattr(pre, 'transform') or not (hasattr(pre, 'fit') or hasattr(pre, 'fit_transform')):
+                    self.logger.logger.info(
+                        f"Loaded preprocessor for {symbol} is not a transformer; using fresh scaler. (type={type(pre)})"
+                    )
+                    self.preprocessors[symbol] = DataPreprocessor()
             else:
                 # Create new preprocessor for this symbol
                 self.preprocessors[symbol] = DataPreprocessor()
@@ -198,6 +297,19 @@ class UnifiedPaperTrader:
         model_files = glob.glob(os.path.join(self.models_dir, pattern))
         if model_files:
             return max(model_files, key=os.path.getmtime)
+        return None
+
+    def _find_latest_unified_artifact(self, model_type: str, symbol: str, filename: str) -> Optional[str]:
+        """Find the latest artifact saved by the unified trainer in nested directories.
+
+        Looks under: <models_dir>/<model_type>/<SYMBOL>/**/<filename>
+        """
+        import glob
+        search_root = os.path.join(self.models_dir, model_type, symbol)
+        pattern = os.path.join(search_root, '**', filename)
+        files = glob.glob(pattern, recursive=True)
+        if files:
+            return max(files, key=os.path.getmtime)
         return None
     
     def _convert_symbol_format(self, symbol: str) -> str:
@@ -286,7 +398,7 @@ class UnifiedPaperTrader:
         """Fetch OHLCV data with retry logic."""
         for attempt in range(max_retries):
             try:
-                ohlcv = exchange.fetch_ohlcv(symbol, '15m', limit=100)
+                ohlcv = exchange.fetch_ohlcv(symbol, self.interval, limit=100)
                 return ohlcv
             except ccxt.RateLimitExceeded:
                 self.logger.logger.warning(f"Rate limit exceeded for {symbol}, waiting...")
@@ -361,7 +473,6 @@ class UnifiedPaperTrader:
             if (df[col] <= 0).any():
                 self.logger.logger.error(f"Non-positive prices in {col} for {symbol}")
                 return False
-        
         # Validate OHLC relationships
         if (df['high'] < df[['open', 'close']].max(axis=1)).any():
             self.logger.logger.error(f"Invalid high prices for {symbol}")
@@ -370,7 +481,6 @@ class UnifiedPaperTrader:
         if (df['low'] > df[['open', 'close']].min(axis=1)).any():
             self.logger.logger.error(f"Invalid low prices for {symbol}")
             return False
-        
         # Check data freshness (within 2 hours)
         if isinstance(df.index, pd.DatetimeIndex):
             latest_time = df.index.max()
@@ -379,7 +489,7 @@ class UnifiedPaperTrader:
             current_time = pd.Timestamp.now(tz='UTC')
             time_diff = current_time - latest_time
             if time_diff > pd.Timedelta(hours=2):
-                self.logger.logger.warning(f"Stale data for {symbol}: {time_diff}")
+                self.logger.logger.warning(f"Data for {symbol} is stale by {time_diff}")
                 return False
         
         # Ensure sufficient data points
@@ -388,7 +498,7 @@ class UnifiedPaperTrader:
             return False
         
         return True
-    
+
     def generate_signals(self, market_data: dict) -> dict:
         """Generate trading signals using per-symbol models."""
         signals = {}
@@ -400,13 +510,13 @@ class UnifiedPaperTrader:
                     self.logger.logger.warning(f"No models available for {symbol}")
                     signals[symbol] = signal
                     continue
-                # Use feature names from metadata for this symbol
+                # Use feature names from metadata for this symbol (for GRU/LGBM)
                 feature_names = self.symbol_feature_metadata.get(symbol, self.feature_engine.get_feature_names(df))
-                # Align features: add missing columns, order, fill missing with 0
-                features = df.reindex(columns=feature_names, fill_value=0).copy()
+                # Align features for supervised models: add missing columns, order, fill missing with 0
+                features_for_supervised = df.reindex(columns=feature_names, fill_value=0).copy()
                 # Final NaN check and cleaning
-                features = features.ffill().bfill().fillna(0)
-                if features.empty:
+                features_for_supervised = features_for_supervised.ffill().bfill().fillna(0)
+                if features_for_supervised.empty:
                     self.logger.logger.warning(f"No valid features for {symbol}")
                     signals[symbol] = signal
                     continue
@@ -414,17 +524,18 @@ class UnifiedPaperTrader:
                 predictions = []
                 # GRU prediction
                 if 'gru' in self.models[symbol]:
-                    gru_pred = self._get_gru_prediction(symbol, features)
+                    gru_pred = self._get_gru_prediction(symbol, features_for_supervised)
                     if gru_pred is not None:
                         predictions.append(('gru', gru_pred))
                 # LightGBM prediction
                 if 'lightgbm' in self.models[symbol]:
-                    lgbm_pred = self._get_lightgbm_prediction(symbol, features)
+                    lgbm_pred = self._get_lightgbm_prediction(symbol, features_for_supervised)
                     if lgbm_pred is not None:
                         predictions.append(('lightgbm', lgbm_pred))
                 # PPO prediction
                 if 'ppo' in self.models[symbol]:
-                    ppo_pred = self._get_ppo_prediction(symbol, features)
+                    # Use original market df (with raw OHLCV) for PPO to match training env
+                    ppo_pred = self._get_ppo_prediction(symbol, df)
                     if ppo_pred is not None:
                         predictions.append(('ppo', ppo_pred))
                 # Combine predictions into signal
@@ -443,6 +554,11 @@ class UnifiedPaperTrader:
         try:
             model = self.models[symbol]['gru']
             preprocessor = self.preprocessors.get(symbol, self.preprocessor)
+            # Ensure preprocessor is valid transformer
+            if not hasattr(preprocessor, 'transform'):
+                preprocessor = self.preprocessor
+            if not (hasattr(preprocessor, 'fit') or hasattr(preprocessor, 'fit_transform')):
+                preprocessor = self.preprocessor
             
             sequence_length = self.config.get('models', {}).get('gru', {}).get('sequence_length', 20)
             
@@ -454,8 +570,12 @@ class UnifiedPaperTrader:
             try:
                 features_scaled = preprocessor.transform(features)
             except Exception:
-                # Fallback: fit and transform if transform fails
-                features_scaled = preprocessor.fit_transform(features)
+                # Fallback: fit and transform if transform fails (on a fresh DataPreprocessor)
+                if hasattr(preprocessor, 'fit_transform'):
+                    features_scaled = preprocessor.fit_transform(features)
+                else:
+                    fresh = DataPreprocessor()
+                    features_scaled = fresh.fit_transform(features)
             
             # Create sequence
             sequence = features_scaled[-sequence_length:].reshape(1, sequence_length, -1)
@@ -506,30 +626,28 @@ class UnifiedPaperTrader:
             self.logger.logger.error(f"LightGBM prediction failed for {symbol}: {e}")
             return None
     
-    def _get_ppo_prediction(self, symbol: str, features: pd.DataFrame) -> Optional[float]:
-        """Get PPO model prediction with proper action mapping."""
+    def _get_ppo_prediction(self, symbol: str, market_df: pd.DataFrame) -> Optional[float]:
+        """Get PPO model prediction with observation shape aligned to training env (lookback, 10)."""
         try:
             model = self.models[symbol]['ppo']
-            preprocessor = self.preprocessors.get(symbol, self.preprocessor)
-            
             sequence_length = self.config.get('models', {}).get('gru', {}).get('sequence_length', 20)
             
-            if len(features) < sequence_length:
-                self.logger.logger.debug(f"Insufficient data for PPO sequence: {len(features)} < {sequence_length}")
+            if len(market_df) < sequence_length:
+                self.logger.logger.debug(f"Insufficient data for PPO sequence: {len(market_df)} < {sequence_length}")
                 return None
-            
-            # Exclude only 'id' from market features for PPO
-            market_features = [col for col in features.columns if col != 'id']
-            features_for_ppo = features[market_features]
-            
-            # Scale features using symbol-specific preprocessor
-            try:
-                features_scaled = preprocessor.transform(features_for_ppo)
-            except Exception:
-                features_scaled = preprocessor.fit_transform(features_for_ppo)
-            
-            # Create market observation sequence
-            market_sequence = features_scaled[-sequence_length:]
+            # Ensure required raw columns exist
+            base_cols = ['open', 'high', 'low', 'close', 'volume', 'quote_volume', 'trades']
+            df = market_df.copy()
+            for col in base_cols:
+                if col not in df.columns:
+                    # Fill missing optional columns with zeros
+                    df[col] = 0.0
+            df = df[base_cols]
+            # Clean and clip similar to env preprocessing
+            arr_np: np.ndarray = df.to_numpy(dtype=np.float32)
+            arr_np = np.nan_to_num(arr_np, nan=0.0, posinf=1.0, neginf=-1.0)
+            arr_np = np.clip(arr_np, -10.0, 10.0)
+            market_sequence = arr_np[-sequence_length:, :]
             
             # Create portfolio state (normalized)
             current_balance = self.balance
@@ -540,14 +658,19 @@ class UnifiedPaperTrader:
             total_value = current_balance + position_value
             balance_ratio = current_balance / max(total_value, 1.0)
             position_ratio = position_value / max(total_value, 1.0)
+            # Unrealized PnL ratio approximation
+            unrealized_pnl = 0.0
+            if symbol in self.positions:
+                pos = self.positions[symbol]
+                unrealized_pnl = (self.last_prices.get(symbol, 0) - pos['avg_price']) * pos['amount']
+            unrealized_pnl_ratio = unrealized_pnl / max(total_value, 1.0)
             
-            # Create portfolio features (12 features to match training)
+            # Create portfolio features (3 features to match env)
             portfolio_features = np.array([
                 balance_ratio,
                 position_ratio,
-                0.0,  # pnl_ratio
-                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0  # padding for compatibility
-            ])
+                unrealized_pnl_ratio
+            ], dtype=np.float32)
             
             # Tile portfolio features to match sequence length
             portfolio_matrix = np.tile(portfolio_features, (sequence_length, 1))
@@ -556,7 +679,7 @@ class UnifiedPaperTrader:
             observation = np.concatenate([market_sequence, portfolio_matrix], axis=1)
             
             # Validate observation shape - should match training
-            expected_shape = (sequence_length, market_sequence.shape[1] + 12)
+            expected_shape = (sequence_length, market_sequence.shape[1] + 3)
             if observation.shape != expected_shape:
                 self.logger.logger.warning(f"PPO observation shape mismatch for {symbol}: {observation.shape} != {expected_shape}")
                 return None
@@ -570,20 +693,11 @@ class UnifiedPaperTrader:
             action, _ = model.predict(observation, deterministic=True)
             
             # Convert action to prediction value
-            if hasattr(action, '__len__'):
-                action_value = int(action[0])
-            else:
-                action_value = int(action)
-            
-            # Map action to prediction with proper scaling
-            if action_value == 0:  # Hold
-                pred = 0.0
-            elif action_value == 1:  # Buy
-                pred = 0.002  # Strong buy signal
-            elif action_value == 2:  # Sell
-                pred = -0.002  # Strong sell signal
-            else:
-                pred = 0.0  # Default to hold for any unexpected action
+            # For continuous action space in env (Box(1,)), interpret action as target position change
+            # Convert to a directional score scaled by configurable ppo_scale
+            action_value = float(action[0]) if hasattr(action, '__len__') else float(action)
+            action_value = np.clip(action_value, -1.0, 1.0)
+            pred = float(self.ppo_scale) * action_value
             
             self.logger.logger.debug(f"PPO prediction for {symbol}: action={action_value}, pred={pred}")
             return float(pred)
@@ -598,8 +712,8 @@ class UnifiedPaperTrader:
             # Extract prediction values
             pred_values = [pred for _, pred in predictions]
             
-            # Calculate weighted average (can be customized)
-            weights = {'gru': 0.3, 'lightgbm': 0.3, 'ppo': 0.4}
+            # Calculate weighted average (configurable)
+            weights = self.model_weights
             weighted_sum = sum(weights.get(model, 1.0) * pred for model, pred in predictions)
             total_weight = sum(weights.get(model, 1.0) for model, _ in predictions)
             
@@ -626,21 +740,29 @@ class UnifiedPaperTrader:
     def _get_dynamic_threshold(self, symbol: str, df: pd.DataFrame) -> float:
         """Calculate dynamic threshold based on recent volatility."""
         base_threshold = self.symbol_thresholds.get(symbol, self.default_threshold)
-        
+
         try:
             if 'close' in df.columns and len(df) > 20:
                 recent_returns = df['close'].pct_change().dropna().tail(20)
                 volatility = recent_returns.std()
-                
-                # Adjust threshold based on volatility
-                volatility_multiplier = max(0.5, min(2.0, volatility / 0.02))  # Scale around 2% baseline
-                dynamic_threshold = base_threshold * volatility_multiplier
-                
-                self.logger.logger.debug(f"Dynamic threshold for {symbol}: {dynamic_threshold:.6f} (vol: {volatility:.6f})")
+                # Optional cost floor to avoid trading under fees+slippage
+                cost_floor = 0.0
+                if self.use_cost_floor:
+                    cost_floor = (self.transaction_fee + self.slippage) * self.cost_floor_multiplier
+                # Volatility multiplier with configurable reference and bounds
+                if volatility and volatility > 0:
+                    lower, upper = self.vol_bounds
+                    vol_mult = max(lower, min(upper, volatility / self.vol_reference))
+                else:
+                    vol_mult = 1.0
+                dynamic_threshold = max(base_threshold, cost_floor) * vol_mult
+                self.logger.logger.debug(
+                    f"Dynamic threshold for {symbol}: {dynamic_threshold:.6f} (vol: {volatility:.6f}, cost:{cost_floor:.6f}, base:{base_threshold:.6f})"
+                )
                 return dynamic_threshold
         except Exception as e:
             self.logger.logger.warning(f"Failed to calculate dynamic threshold for {symbol}: {e}")
-        
+
         return base_threshold
     
     async def execute_trades(self, signals: dict, market_data: dict):
@@ -705,9 +827,8 @@ class UnifiedPaperTrader:
                     # No position to sell, return 0
                     position_size = 0.0
             
-            # Ensure minimum viable trade size
-            min_trade_value = 5.0  # Minimum €5 trade (lowered for testing)
-            min_position_size = min_trade_value / price
+            # Ensure minimum viable trade size (configurable)
+            min_position_size = float(self.min_trade_value) / price
             
             if position_size < min_position_size:
                 return 0.0
@@ -896,7 +1017,7 @@ class UnifiedPaperTrader:
                 
                 if not market_data:
                     self.logger.logger.warning("No market data available, skipping iteration")
-                    await asyncio.sleep(60)
+                    await asyncio.sleep(self._time_to_next_tick())
                     continue
                 
                 self.logger.logger.info(f"Retrieved data for {len(market_data)} symbols")
@@ -918,9 +1039,14 @@ class UnifiedPaperTrader:
                 if iteration % 10 == 0:  # Every 10 iterations
                     self._log_portfolio_status()
                 
-                # Wait before next iteration
-                self.logger.logger.info("Waiting for next iteration...")
-                await asyncio.sleep(60)  # 1 minute
+                # Wait before next iteration (skip waiting if this was the final requested iteration)
+                if iterations is not None and iteration >= iterations:
+                    self.logger.logger.info("Completed requested iterations; exiting loop without additional wait.")
+                    break
+                sleep_sec = self._time_to_next_tick()
+                next_run_ts = datetime.utcnow() + timedelta(seconds=sleep_sec)
+                self.logger.logger.info(f"Waiting {int(sleep_sec)}s until next loop tick ({self.loop_interval}) (~{next_run_ts:%Y-%m-%d %H:%M:%S} UTC)")
+                await asyncio.sleep(sleep_sec)
                 
         except KeyboardInterrupt:
             self.logger.logger.info("Trading loop interrupted by user")
@@ -932,6 +1058,44 @@ class UnifiedPaperTrader:
         finally:
             self.logger.logger.info("Trading loop ended")
             self._log_portfolio_status()
+
+    def _interval_to_seconds(self, interval: Optional[str] = None) -> int:
+        """Convert timeframe string to seconds (e.g., '15m' -> 900). Defaults to self.interval."""
+        tf = (interval or self.interval or '15m').strip().lower()
+        try:
+            unit = tf[-1]
+            value = int(tf[:-1])
+            if unit == 'm':
+                return value * 60
+            if unit == 'h':
+                return value * 3600
+            if unit == 'd':
+                return value * 86400
+            # Fallback assume minutes if unit missing
+            return int(tf) * 60
+        except Exception:
+            return 900  # default 15 minutes
+
+    def _time_to_next_candle(self) -> int:
+        """Seconds until the next interval boundary for the configured timeframe."""
+        interval_sec = max(1, self._interval_to_seconds())
+        now = int(time.time())
+        # Next boundary is the next multiple of interval_sec
+        remainder = now % interval_sec
+        wait = (interval_sec - remainder) if remainder != 0 else interval_sec
+        # Add a tiny buffer (2s) to reduce race with exchange candle close
+        wait = max(1, min(wait + 2, interval_sec))
+        return int(wait)
+
+    def _time_to_next_tick(self) -> int:
+        """Seconds until the next loop tick boundary (trading.loop_interval)."""
+        tick_sec = max(1, self._interval_to_seconds(self.loop_interval))
+        now = int(time.time())
+        remainder = now % tick_sec
+        wait = (tick_sec - remainder) if remainder != 0 else tick_sec
+        # A small buffer to avoid racing with exchange/clock drift
+        wait = max(1, min(wait + 2, tick_sec))
+        return int(wait)
 
 
 def load_config(config_path: str = "src/config/config.yaml") -> Dict[str, Any]:
