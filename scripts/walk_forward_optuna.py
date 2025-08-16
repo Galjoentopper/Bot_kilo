@@ -197,7 +197,7 @@ def evaluate_fold(model_name: str,
         trainer.build_model(X_tr.shape[2])
         trainer.train(X_tr, y_tr, X_va, y_va, experiment_name="gru_walk_forward")
         preds = trainer.predict(X_va)
-        net, sharpe = backtest_direction(preds, y_val, fee_bps=float(cfg.get('fees_bps', 10.0)))
+        net, sharpe = backtest_direction(preds, y_va, fee_bps=float(cfg.get('fees_bps', 10.0)))
         metrics = {
             'val_sharpe': sharpe,
             'val_mean': float(np.mean(net)),

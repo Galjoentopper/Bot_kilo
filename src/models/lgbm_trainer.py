@@ -310,7 +310,9 @@ class LightGBMTrainer:
                             self.decision_threshold = self.decision_threshold or 0.5
 
                 val_predictions = self.predict(X_val_array)
-                val_metrics = self._calculate_metrics(y_val, val_predictions)
+                # Use processed targets for classification metrics
+                y_val_for_metrics = y_val_proc if (self.task_type == "classification" or self.as_direction) else y_val
+                val_metrics = self._calculate_metrics(y_val_for_metrics, val_predictions)
                 
                 # Log validation metrics (if MLflow available)
                 if MLFLOW_AVAILABLE:
