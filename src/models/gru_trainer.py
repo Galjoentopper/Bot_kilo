@@ -19,6 +19,7 @@ from datetime import datetime
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 import matplotlib.pyplot as plt
 import seaborn as sns
+import random
 
 logger = logging.getLogger(__name__)
 
@@ -162,6 +163,11 @@ class GRUTrainer:
         # Device configuration (GPU optimization for Paperspace)
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         logger.info(f"Using device: {self.device}")
+
+        # Reproducibility and perf tuning
+        self.seed = int(self.training_config.get('seed', 42))
+        self.deterministic = bool(self.training_config.get('deterministic', False))
+        self._set_seed(self.seed, self.deterministic)
         
         # Model parameters
         self.sequence_length = self.model_config.get('sequence_length', 20)
@@ -172,17 +178,23 @@ class GRUTrainer:
         self.batch_size = self.model_config.get('batch_size', 64)
         self.epochs = self.model_config.get('epochs', 100)
         self.early_stopping_patience = self.model_config.get('early_stopping_patience', 10)
-        
+
         # Training optimization settings
         self.mixed_precision = self.training_config.get('mixed_precision', True)
         self.num_workers = self.training_config.get('num_workers', 4)
         self.pin_memory = self.training_config.get('pin_memory', True)
+        self.max_grad_norm = float(self.training_config.get('max_grad_norm', 1.0))
         
         # Initialize model components
         self.model = None
         self.optimizer = None
         self.scheduler = None
-        self.criterion = nn.MSELoss()
+        # Configurable loss: mse (default) or huber (smoothl1)
+        loss_name = str(self.model_config.get('loss', 'mse')).lower()
+        if loss_name in ('huber', 'smoothl1', 'smooth_l1'):
+            self.criterion = nn.SmoothL1Loss()
+        else:
+            self.criterion = nn.MSELoss()
         self.scaler = torch.cuda.amp.GradScaler() if self.mixed_precision and torch.cuda.is_available() else None
         
         # Training history
@@ -192,6 +204,19 @@ class GRUTrainer:
         self.best_model_state = None
         
         logger.info("GRU Trainer initialized with GPU optimization")
+
+    def _set_seed(self, seed: int, deterministic: bool = False) -> None:
+        """Set random seeds and cudnn flags for reproducibility/perf."""
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+            if deterministic:
+                torch.backends.cudnn.deterministic = True
+                torch.backends.cudnn.benchmark = False
+            else:
+                torch.backends.cudnn.benchmark = True
     
     def build_model(self, input_size: int) -> nn.Module:
         """
@@ -269,7 +294,8 @@ class GRUTrainer:
             batch_size=self.batch_size,
             shuffle=True,
             num_workers=self.num_workers,
-            pin_memory=self.pin_memory,
+            pin_memory=(self.pin_memory and self.device.type == 'cuda'),
+            persistent_workers=True if self.num_workers and self.num_workers > 0 else False,
             drop_last=True
         )
         
@@ -278,7 +304,8 @@ class GRUTrainer:
             batch_size=self.batch_size,
             shuffle=False,
             num_workers=self.num_workers,
-            pin_memory=self.pin_memory
+            pin_memory=(self.pin_memory and self.device.type == 'cuda'),
+            persistent_workers=True if self.num_workers and self.num_workers > 0 else False
         )
         
         logger.info(f"Data loaders prepared - Train: {len(train_loader)} batches, Val: {len(val_loader)} batches")
@@ -302,7 +329,7 @@ class GRUTrainer:
         num_batches = 0
         
         for batch_idx, (data, target) in enumerate(train_loader):
-            data, target = data.to(self.device), target.to(self.device)
+            data, target = data.to(self.device, non_blocking=True), target.to(self.device, non_blocking=True)
             
             if self.optimizer is None:
                 raise ValueError("Optimizer must be initialized before training")
@@ -319,6 +346,10 @@ class GRUTrainer:
                 self.scaler.scale(loss).backward()
                 if self.scaler is None or self.optimizer is None:
                     raise ValueError("Scaler and optimizer must be initialized")
+                # Gradient clipping (requires unscale first)
+                if self.max_grad_norm and self.max_grad_norm > 0:
+                    self.scaler.unscale_(self.optimizer)
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
             else:
@@ -330,6 +361,8 @@ class GRUTrainer:
                 loss.backward()
                 if self.optimizer is None:
                     raise ValueError("Optimizer must be initialized before training")
+                if self.max_grad_norm and self.max_grad_norm > 0:
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
                 self.optimizer.step()
             
             total_loss += loss.item()
@@ -359,9 +392,9 @@ class GRUTrainer:
         
         with torch.no_grad():
             for data, target in val_loader:
-                data, target = data.to(self.device), target.to(self.device)
+                data, target = data.to(self.device, non_blocking=True), target.to(self.device, non_blocking=True)
                 
-                if self.mixed_precision:
+                if self.mixed_precision and torch.cuda.is_available():
                     with torch.cuda.amp.autocast():
                         if self.model is None:
                             raise ValueError("Model must be built before validation")
@@ -495,10 +528,13 @@ class GRUTrainer:
                     sample_input = torch.randn(1, self.sequence_length, input_size).to(self.device)
                     
                     # Log model with signature and input example
-                    mlflow.pytorch.log_model(
-                        self.model,
-                        artifact_path="model"
-                    )
+                    try:
+                        mlflow.pytorch.log_model(  # type: ignore[attr-defined]
+                            self.model,
+                            artifact_path="model"
+                        )
+                    except Exception as e:
+                        logger.warning(f"MLflow log_model failed: {e}")
         
         # Training results
         results = {
@@ -527,7 +563,7 @@ class GRUTrainer:
             raise ValueError("Model must be trained before making predictions")
         
         self.model.eval()
-        predictions = []
+        predictions: List[np.ndarray] = []
         
         # Convert to tensor
         X_tensor = torch.FloatTensor(X).to(self.device)
@@ -538,7 +574,7 @@ class GRUTrainer:
             for i in range(0, len(X_tensor), batch_size):
                 batch = X_tensor[i:i + batch_size]
                 
-                if self.mixed_precision:
+                if self.mixed_precision and torch.cuda.is_available():
                     with torch.cuda.amp.autocast():
                         batch_pred = self.model(batch)
                 else:

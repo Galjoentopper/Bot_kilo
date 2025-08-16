@@ -69,7 +69,14 @@ class LightGBMTrainer:
         """
         self.config = config
         self.model_config = config.get('models', {}).get('lightgbm', {})
-        self.task_type = task_type
+        # Task can be driven by config, fallback to provided arg
+        self.task_type = self.model_config.get('task_type', task_type)
+        # Optional: treat target as direction labels
+        self.as_direction = bool(self.model_config.get('as_direction', False))
+        # Optional: threshold for direction labeling (default 0 for sign)
+        self.direction_threshold = float(self.model_config.get('direction_threshold', 0.0))
+        # Optional: classification decision threshold (calibrated if possible)
+        self.decision_threshold = None  # type: Optional[float]
         
         # Model parameters
         self.num_leaves = self.model_config.get('num_leaves', 31)
@@ -173,7 +180,7 @@ class LightGBMTrainer:
                 X_val_array = X_val.values
             else:
                 X_val_array = X_val
-        
+
         # Build model
         self.build_model()
         
@@ -200,6 +207,15 @@ class LightGBMTrainer:
                     "n_features": len(self.feature_names)
                 })
             
+            # Optionally convert targets for classification/direction tasks
+            y_train_proc = y_train
+            y_val_proc = y_val
+            if self.task_type == "classification" or self.as_direction:
+                # Convert to binary labels based on threshold (positive vs non-positive)
+                y_train_proc = (y_train > self.direction_threshold).astype(int)
+                if y_val is not None:
+                    y_val_proc = (y_val > self.direction_threshold).astype(int)
+
             # Prepare evaluation set
             eval_set = None
             X_val_array = None
@@ -208,13 +224,13 @@ class LightGBMTrainer:
                     X_val_array = X_val.values
                 else:
                     X_val_array = X_val
-                eval_set = [(X_val_array, y_val)]
+                eval_set = [(X_val_array, y_val_proc if (self.task_type == "classification" or self.as_direction) else y_val)]
             
             # Train model
             if self.model is not None:
                 self.model.fit(
                     X_train_array,
-                    y_train,
+                    y_train_proc if (self.task_type == "classification" or self.as_direction) else y_train,
                     eval_set=eval_set,
                     eval_names=['validation'] if eval_set else None,
                     callbacks=[
@@ -242,6 +258,32 @@ class LightGBMTrainer:
             # Evaluate on validation set if provided
             val_metrics = {}
             if X_val is not None and y_val is not None and X_val_array is not None:
+                # Calibrate classification threshold if applicable
+                if (self.task_type == "classification" or self.as_direction):
+                    from lightgbm import LGBMClassifier
+                    if isinstance(self.model, LGBMClassifier):
+                        try:
+                            proba = self.model.predict_proba(X_val_array)
+                            pos = np.asarray(proba)[:, 1]
+                            # Grid search a simple threshold to maximize accuracy
+                            thresholds = np.linspace(0.3, 0.7, 41)
+                            best_thr = 0.5
+                            best_acc = -1.0
+                            y_val_bin = (y_val > self.direction_threshold).astype(int)
+                            for thr in thresholds:
+                                preds = (pos > thr).astype(int)
+                                acc = accuracy_score(y_val_bin, preds)
+                                if acc > best_acc:
+                                    best_acc = acc
+                                    best_thr = thr
+                            self.decision_threshold = float(best_thr)
+                            if MLFLOW_AVAILABLE:
+                                mlflow.log_metric("val_decision_threshold", float(best_thr))
+                                mlflow.log_metric("val_decision_threshold_acc", float(best_acc))
+                        except Exception:
+                            # Keep default 0.5 if calibration fails
+                            self.decision_threshold = self.decision_threshold or 0.5
+
                 val_predictions = self.predict(X_val_array)
                 val_metrics = self._calculate_metrics(y_val, val_predictions)
                 
@@ -262,8 +304,8 @@ class LightGBMTrainer:
                     sample_input = X_train[0:1]
                 
                 # Log model with signature and input example
-                if MLFLOW_AVAILABLE and mlflow is not None:
-                    mlflow.lightgbm.log_model(
+                if MLFLOW_AVAILABLE and mlflow is not None and hasattr(mlflow, "lightgbm"):
+                    mlflow.lightgbm.log_model(  # type: ignore[attr-defined]
                         self.model,
                         artifact_path="model"
                     )
@@ -273,7 +315,8 @@ class LightGBMTrainer:
             "model": self.model,
             "feature_importance": importance_df,
             "feature_names": self.feature_names,
-            "best_iteration": getattr(self.model, 'best_iteration', self.n_estimators)
+            "best_iteration": getattr(self.model, 'best_iteration', self.n_estimators),
+            "decision_threshold": self.decision_threshold
         }
         
         if X_val is not None and y_val is not None and val_metrics:
@@ -376,8 +419,28 @@ class LightGBMTrainer:
         else:
             X_array = X
         
+        # For classification or direction tasks, return centered score in [-0.5, 0.5]
+        if self.task_type == "classification" or self.as_direction:
+            from lightgbm import LGBMClassifier
+            if isinstance(self.model, LGBMClassifier) and hasattr(self.model, 'predict_proba'):
+                proba = self.model.predict_proba(X_array)
+                pos = np.asarray(proba)[:, 1]
+                # Center around 0: score = p - threshold (default 0.5 or calibrated)
+                thr = self.decision_threshold if self.decision_threshold is not None else 0.5
+                scores = pos - thr
+                return scores.astype(float)
+            else:
+                logits_or_labels = self.model.predict(X_array)
+                if not isinstance(logits_or_labels, np.ndarray):
+                    logits_or_labels = np.array(logits_or_labels)
+                    
+                # Map {0,1} to {-0.5, +0.5}
+                unique_vals = np.unique(logits_or_labels)
+                if logits_or_labels.ndim == 1 and set(unique_vals).issubset({0, 1}):
+                    return (logits_or_labels.astype(float) - 0.5)
+                return logits_or_labels.astype(float)
+        # Regression: raw prediction
         predictions = self.model.predict(X_array)
-        # Ensure return type is numpy array
         if not isinstance(predictions, np.ndarray):
             predictions = np.array(predictions)
         return predictions
@@ -533,7 +596,8 @@ class LightGBMTrainer:
             'feature_names': self.feature_names,
             'feature_importance': self.feature_importance,
             'task_type': self.task_type,
-            'model_config': self.model_config
+            'model_config': self.model_config,
+            'decision_threshold': self.decision_threshold
         }
         
         joblib.dump(model_data, filepath)
@@ -553,18 +617,19 @@ class LightGBMTrainer:
         """
         if not os.path.exists(filepath):
             raise FileNotFoundError(f"Model file not found: {filepath}")
-        
+
         # Load model data
         model_data = joblib.load(filepath)
-        
+
         # Create trainer instance
-        trainer = cls(config, task_type=model_data['task_type'])
-        
+        trainer = cls(config, task_type=model_data.get('task_type', 'regression'))
+
         # Restore model and metadata
         trainer.model = model_data['model']
-        trainer.feature_names = model_data['feature_names']
-        trainer.feature_importance = model_data['feature_importance']
-        
+        trainer.feature_names = model_data.get('feature_names', [])
+        trainer.feature_importance = model_data.get('feature_importance')
+        trainer.decision_threshold = model_data.get('decision_threshold')
+
         logger.info(f"Model loaded from {filepath}")
         return trainer
     
