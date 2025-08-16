@@ -175,8 +175,9 @@ class UnifiedPaperTrader:
         self.model_weights = trading_config.get('model_weights', {'gru': 0.45, 'lightgbm': 0.45, 'ppo': 0.1})
         self.ppo_scale = trading_config.get('ppo_scale', 0.002)
         self.min_trade_value = trading_config.get('min_trade_value', 5.0)
-        
-        
+        # Prefer best PPO model (from EvalCallback) when available
+        self.prefer_best_ppo = bool(trading_config.get('prefer_best_ppo', True))
+
         # Portfolio state
         self.balance = self.initial_balance
         self.positions = {}  # symbol -> {'amount': float, 'avg_price': float}
@@ -246,9 +247,15 @@ class UnifiedPaperTrader:
                 except Exception as e:
                     self.logger.logger.warning(f"Failed to load LightGBM model for {symbol}: {e}")
             
-            # Load PPO model
-            ppo_path = self._find_latest_model(f'ppo_model_{symbol}_*.zip') or \
-                       self._find_latest_unified_artifact('ppo', symbol, 'model.zip')
+            # Load PPO model (prefer best if available)
+            ppo_path = None
+            if self.prefer_best_ppo:
+                ppo_path = self._find_latest_best_ppo(symbol)
+                if ppo_path:
+                    self.logger.logger.info(f"Using BEST PPO model for {symbol}: {ppo_path}")
+            if not ppo_path:
+                ppo_path = self._find_latest_model(f'ppo_model_{symbol}_*.zip') or \
+                           self._find_latest_unified_artifact('ppo', symbol, 'model.zip')
             if ppo_path:
                 try:
                     self.models[symbol]['ppo'] = PPOTrainer.load_model(ppo_path, self.config)
@@ -312,6 +319,26 @@ class UnifiedPaperTrader:
         if files:
             return max(files, key=os.path.getmtime)
         return None
+
+    def _find_latest_best_ppo(self, symbol: str) -> Optional[str]:
+        """Find the latest 'best' PPO model produced by EvalCallback.
+
+        Search order (most specific first):
+        1) <models_dir>/ppo/<SYMBOL>/**/best_model.zip
+        2) <models_dir>/ppo_best_*/best_model.zip (global best from recent runs)
+        Returns newest match by modification time, or None.
+        """
+        import glob
+        candidates: List[str] = []
+        # Symbol-scoped bests
+        pattern_symbol = os.path.join(self.models_dir, 'ppo', symbol, '**', 'best_model.zip')
+        candidates.extend(glob.glob(pattern_symbol, recursive=True))
+        # Global best folders created by EvalCallback
+        pattern_global = os.path.join(self.models_dir, 'ppo_best_*', 'best_model.zip')
+        candidates.extend(glob.glob(pattern_global))
+        if not candidates:
+            return None
+        return max(candidates, key=os.path.getmtime)
     
     def _convert_symbol_format(self, symbol: str) -> str:
         """Convert symbol format to ccxt standard."""
@@ -815,7 +842,11 @@ class UnifiedPaperTrader:
         """Get PPO model prediction with observation shape aligned to training env (lookback, 10)."""
         try:
             model = self.models[symbol]['ppo']
-            sequence_length = self.config.get('models', {}).get('gru', {}).get('sequence_length', 20)
+            # Prefer PPO's own sequence length if provided; fallback to GRU's, then 20
+            sequence_length = (
+                self.config.get('models', {}).get('ppo', {}).get('sequence_length')
+                or self.config.get('models', {}).get('gru', {}).get('sequence_length', 20)
+            )
             
             if len(market_df) < sequence_length:
                 self.logger.logger.debug(f"Insufficient data for PPO sequence: {len(market_df)} < {sequence_length}")
