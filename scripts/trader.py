@@ -326,7 +326,7 @@ class UnifiedPaperTrader:
         return symbol
     
     async def get_market_data(self) -> dict:
-        """Get latest market data for all symbols using the same pipeline as training."""
+        """Get latest market data for all symbols."""
         market_data = {}
         
         # Check cache first
@@ -335,75 +335,47 @@ class UnifiedPaperTrader:
             self.logger.logger.debug("Using cached market data")
             return self.data_cache.copy()
         
-        # Import DatasetBuilder for consistent data pipeline
-        from src.data_pipeline.dataset_builder import DatasetBuilder
-        from src.data_pipeline.loader import DataLoader
-        
-        # Initialize components using the same pipeline as training
+        # Initialize exchange
+        exchange = None
         try:
-            dataset_builder = DatasetBuilder(data_dir="./data", config=self.config)
-            data_loader = DataLoader("./data")
-            
-            # Get recent data from local database + latest live data
-            for symbol in self.symbols:
-                try:
-                    # Step 1: Load recent historical data from SQLite (same as training)
-                    # Get sufficient historical data for feature calculation (at least 200 periods for proper technical indicators)
-                    historical_df = data_loader.load_symbol_data(
-                        symbol=symbol,
-                        interval=self.interval,  # Use 30m as configured
-                        limit=300  # More data for better feature calculation
-                    )
+            exchange = ccxt.binance({
+                'enableRateLimit': True,
+                'options': {'defaultType': 'spot'},
+                'timeout': 30000
+            })
+            exchange.load_markets()
+        except Exception as e:
+            self.logger.logger.error(f"Error initializing exchange: {e}")
+            return market_data
+        
+        # Fetch data for each symbol
+        for symbol in self.symbols:
+            try:
+                formatted_symbol = self._convert_symbol_format(symbol)
+                ohlcv = await self._fetch_with_retry(exchange, formatted_symbol)
+                
+                if ohlcv:
+                    df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                    df['datetime'] = pd.to_datetime(df['timestamp'], unit='ms')
+                    df = df.set_index('datetime')
                     
-                    if historical_df.empty:
-                        self.logger.logger.warning(f"No historical data found for {symbol}")
-                        continue
+                    # Add missing columns for compatibility
+                    df['quote_volume'] = df['volume']
+                    df['trades'] = 0
                     
-                    # Step 2: Fetch latest live data from Binance to supplement
-                    live_df = await self._fetch_live_data_supplement(symbol)
+                    # Generate features with robust NaN handling
+                    df = self._generate_features_with_validation(df, symbol)
                     
-                    # Step 3: Combine historical + live data
-                    if live_df is not None and not live_df.empty:
-                        # Merge, ensuring no duplicates and proper chronological order
-                        combined_df = self._merge_historical_and_live_data(historical_df, live_df)
-                    else:
-                        combined_df = historical_df
-                    
-                    # Step 4: Generate features using the same FeatureEngine as training
-                    df_with_features = self.feature_engine.generate_all_features(combined_df)
-                    
-                    # Step 5: Ensure feature alignment with training metadata
-                    feature_names = self.symbol_feature_metadata.get(symbol, [])
-                    if feature_names:
-                        # Align features exactly as in training
-                        df_aligned = df_with_features.reindex(columns=feature_names, fill_value=0).copy()
-                        # Add back OHLCV columns
-                        for col in ['open', 'high', 'low', 'close', 'volume']:
-                            if col in df_with_features.columns:
-                                df_aligned[col] = df_with_features[col]
-                        df_with_features = df_aligned
-                    
-                    # Step 6: Robust NaN handling (same as training)
-                    df_with_features = self._clean_features_for_inference(df_with_features, symbol)
-                    
-                    if self._validate_market_data(df_with_features, symbol):
-                        market_data[symbol] = df_with_features
-                        self.last_prices[symbol] = df_with_features['close'].iloc[-1]
-                        self.logger.logger.info(f"Loaded {len(df_with_features)} records for {symbol} with {len(feature_names)} features")
+                    if self._validate_market_data(df, symbol):
+                        market_data[symbol] = df
+                        self.last_prices[symbol] = df['close'].iloc[-1]
                     else:
                         self.logger.logger.warning(f"Invalid market data for {symbol}")
-                        
-                except Exception as e:
-                    self.logger.logger.error(f"Error processing data for {symbol}: {e}")
-                    # Fallback to direct API fetch if database method fails
-                    fallback_data = await self._get_fallback_market_data(symbol)
-                    if fallback_data is not None:
-                        market_data[symbol] = fallback_data
-        
-        except Exception as e:
-            self.logger.logger.error(f"Error in enhanced data pipeline: {e}")
-            # Fallback to original method if enhanced pipeline fails
-            return await self._get_fallback_market_data_all()
+                else:
+                    self.logger.logger.warning(f"No data fetched for {symbol}")
+                    
+            except Exception as e:
+                self.logger.logger.error(f"Error processing data for {symbol}: {e}")
         
         # Update cache
         self.data_cache = market_data.copy()
@@ -422,11 +394,11 @@ class UnifiedPaperTrader:
         
         return True
     
-    async def _fetch_with_retry(self, exchange, symbol: str, max_retries: int = 3, limit: int = 100):
+    async def _fetch_with_retry(self, exchange, symbol: str, max_retries: int = 3):
         """Fetch OHLCV data with retry logic."""
         for attempt in range(max_retries):
             try:
-                ohlcv = exchange.fetch_ohlcv(symbol, self.interval, limit=limit)
+                ohlcv = exchange.fetch_ohlcv(symbol, self.interval, limit=100)
                 return ohlcv
             except ccxt.RateLimitExceeded:
                 self.logger.logger.warning(f"Rate limit exceeded for {symbol}, waiting...")
@@ -439,139 +411,6 @@ class UnifiedPaperTrader:
                 break
         
         return None
-    
-    async def _fetch_live_data_supplement(self, symbol: str) -> Optional[pd.DataFrame]:
-        """Fetch recent live data from Binance to supplement historical data."""
-        try:
-            exchange = ccxt.binance({
-                'enableRateLimit': True,
-                'options': {'defaultType': 'spot'},
-                'timeout': 30000
-            })
-            exchange.load_markets()
-            
-            formatted_symbol = self._convert_symbol_format(symbol)
-            # Fetch only recent data (last 50 candles) to supplement historical
-            ohlcv = await self._fetch_with_retry(exchange, formatted_symbol, limit=50)
-            
-            if ohlcv:
-                df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                df['datetime'] = pd.to_datetime(df['timestamp'], unit='ms')
-                df = df.set_index('datetime')
-                
-                # Add missing columns to match training data format
-                df['quote_volume'] = df['volume']
-                df['trades'] = 0
-                df['taker_buy_base'] = 0
-                df['taker_buy_quote'] = 0
-                
-                return df
-            
-        except Exception as e:
-            self.logger.logger.warning(f"Failed to fetch live data for {symbol}: {e}")
-        
-        return None
-    
-    def _merge_historical_and_live_data(self, historical_df: pd.DataFrame, live_df: pd.DataFrame) -> pd.DataFrame:
-        """Merge historical and live data, avoiding duplicates."""
-        try:
-            # Find the cutoff point - where historical data ends
-            if not historical_df.empty and not live_df.empty:
-                historical_end = historical_df.index.max()
-                
-                # Only take live data that's newer than historical data
-                new_live_data = live_df[live_df.index > historical_end]
-                
-                if not new_live_data.empty:
-                    # Combine historical + new live data
-                    combined_df = pd.concat([historical_df, new_live_data], axis=0)
-                    combined_df = combined_df.sort_index()
-                    # Remove any potential duplicates
-                    combined_df = combined_df[~combined_df.index.duplicated(keep='last')]
-                    return combined_df
-            
-            return historical_df
-            
-        except Exception as e:
-            self.logger.logger.warning(f"Error merging historical and live data: {e}")
-            return historical_df
-    
-    def _clean_features_for_inference(self, df: pd.DataFrame, symbol: str) -> pd.DataFrame:
-        """Clean features for inference using the same method as training."""
-        try:
-            # Get feature names from metadata
-            feature_names = self.symbol_feature_metadata.get(symbol, [])
-            
-            # Clean feature columns
-            for col in feature_names:
-                if col in df.columns:
-                    # Fill NaN values using multiple strategies (same as training)
-                    if df[col].isna().any():
-                        # Strategy 1: Forward fill
-                        df[col] = df[col].ffill()
-                        # Strategy 2: Backward fill
-                        df[col] = df[col].bfill()
-                        # Strategy 3: Mean fill for any remaining NaN
-                        if df[col].isna().any():
-                            mean_val = df[col].mean()
-                            if pd.isna(mean_val):
-                                mean_val = 0.0
-                            df[col].fillna(mean_val, inplace=True)
-            
-            # Replace infinite values
-            df.replace([np.inf, -np.inf], np.nan, inplace=True)
-            df.fillna(0, inplace=True)
-            
-            return df
-            
-        except Exception as e:
-            self.logger.logger.warning(f"Error cleaning features for {symbol}: {e}")
-            return df
-    
-    async def _get_fallback_market_data(self, symbol: str) -> Optional[pd.DataFrame]:
-        """Fallback method using direct API fetch (original method)."""
-        try:
-            exchange = ccxt.binance({
-                'enableRateLimit': True,
-                'options': {'defaultType': 'spot'},
-                'timeout': 30000
-            })
-            exchange.load_markets()
-            
-            formatted_symbol = self._convert_symbol_format(symbol)
-            ohlcv = await self._fetch_with_retry(exchange, formatted_symbol)
-            
-            if ohlcv:
-                df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                df['datetime'] = pd.to_datetime(df['timestamp'], unit='ms')
-                df = df.set_index('datetime')
-                
-                # Add missing columns for compatibility
-                df['quote_volume'] = df['volume']
-                df['trades'] = 0
-                
-                # Generate features with robust NaN handling
-                df = self._generate_features_with_validation(df, symbol)
-                
-                if self._validate_market_data(df, symbol):
-                    return df
-            
-        except Exception as e:
-            self.logger.logger.error(f"Fallback data fetch failed for {symbol}: {e}")
-        
-        return None
-    
-    async def _get_fallback_market_data_all(self) -> dict:
-        """Fallback method for all symbols using original pipeline."""
-        market_data = {}
-        
-        for symbol in self.symbols:
-            fallback_data = await self._get_fallback_market_data(symbol)
-            if fallback_data is not None:
-                market_data[symbol] = fallback_data
-                self.last_prices[symbol] = fallback_data['close'].iloc[-1]
-        
-        return market_data
     
     def _generate_features_with_validation(self, df: pd.DataFrame, symbol: str) -> pd.DataFrame:
         """Generate features with robust NaN handling."""
