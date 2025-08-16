@@ -92,17 +92,21 @@ class LightGBMTrainer:
         else:
             self.objective = self.model_config.get('objective', 'binary')
             self.metric = self.model_config.get('metric', 'binary_logloss')
-        
+
         # Initialize model
         self.model = None
         self.feature_names = []
         self.feature_importance = None
         self.training_history = {}
-        
+        # Feature tracking for persistence
+        self.selected_features = None  # type: Optional[List[int]]
+        self.feature_count = None
+        self.input_size = None
+
         # Cross-validation settings
         self.cv_folds = 5
         self.early_stopping_rounds = 50
-        
+
         logger.info(f"LightGBM Trainer initialized for {task_type} task")
     
     def build_model(self) -> lgb.LGBMModel:
@@ -143,12 +147,13 @@ class LightGBMTrainer:
         return self.model
     
     def train(
-        self, 
-        X_train: Union[pd.DataFrame, np.ndarray], 
+        self,
+        X_train: Union[pd.DataFrame, np.ndarray],
         y_train: np.ndarray,
-        X_val: Optional[Union[pd.DataFrame, np.ndarray]] = None, 
+        X_val: Optional[Union[pd.DataFrame, np.ndarray]] = None,
         y_val: Optional[np.ndarray] = None,
         feature_names: Optional[List[str]] = None,
+        selected_features: Optional[List[int]] = None,
         experiment_name: str = "lightgbm_training"
     ) -> Dict[str, Any]:
         """
@@ -160,6 +165,7 @@ class LightGBMTrainer:
             X_val: Validation features (optional)
             y_val: Validation targets (optional)
             feature_names: Feature names (optional)
+            selected_features: Indices of selected features (optional)
             experiment_name: MLflow experiment name
             
         Returns:
@@ -167,18 +173,37 @@ class LightGBMTrainer:
         """
         logger.info("Starting LightGBM model training")
         
-        # Handle feature names
+        # Store feature information for persistence
         if isinstance(X_train, pd.DataFrame):
             self.feature_names = list(X_train.columns)
             X_train_array = X_train.values
+            self.input_size = len(self.feature_names)
         else:
-            self.feature_names = feature_names or [f"feature_{i}" for i in range(X_train.shape[1])]
+            self.input_size = X_train.shape[1]
+            self.feature_names = feature_names or [f"feature_{i}" for i in range(self.input_size)]
             X_train_array = X_train
+        
+        # Store feature tracking information
+        self.feature_count = self.input_size
+        self.selected_features = selected_features
+        
+        # Apply feature selection if provided
+        if selected_features is not None:
+            if isinstance(X_train, pd.DataFrame):
+                X_train = X_train.iloc[:, selected_features]
+                self.feature_names = [self.feature_names[i] for i in selected_features]
+            else:
+                X_train_array = X_train_array[:, selected_features]
+                self.feature_names = [self.feature_names[i] for i in selected_features]
         
         if X_val is not None:
             if isinstance(X_val, pd.DataFrame):
+                if selected_features is not None:
+                    X_val = X_val.iloc[:, selected_features]
                 X_val_array = X_val.values
             else:
+                if selected_features is not None:
+                    X_val = X_val[:, selected_features]
                 X_val_array = X_val
 
         # Build model
@@ -418,6 +443,13 @@ class LightGBMTrainer:
             X_array = X.values
         else:
             X_array = X
+        # Apply feature selection if available
+        if self.selected_features is not None and len(self.selected_features) > 0:
+            try:
+                X_array = X_array[:, self.selected_features]
+            except Exception:
+                # Fall back silently if shapes don't align; better to return a prediction than fail hard
+                pass
         
         # For classification or direction tasks, return centered score in [-0.5, 0.5]
         if self.task_type == "classification" or self.as_direction:
@@ -465,6 +497,13 @@ class LightGBMTrainer:
             X_array = X.values
         else:
             X_array = X
+
+        # Apply feature selection if available
+        if self.selected_features is not None and len(self.selected_features) > 0:
+            try:
+                X_array = X_array[:, self.selected_features]
+            except Exception:
+                pass
         
         # Check if we're using a classifier model that has predict_proba method
         from lightgbm import LGBMClassifier
@@ -577,12 +616,13 @@ class LightGBMTrainer:
         plt.tight_layout()
         plt.show()
     
-    def save_model(self, filepath: str):
+    def save_model(self, filepath: str, symbol: Optional[str] = None):
         """
-        Save the trained model.
+        Save the trained model with feature index persistence.
         
         Args:
             filepath: Path to save the model
+            symbol: Optional symbol for symbol-specific models
         """
         if self.model is None:
             raise ValueError("No model to save")
@@ -590,30 +630,50 @@ class LightGBMTrainer:
         # Create directory if it doesn't exist
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
         
-        # Save model and metadata
+        # Enhanced save with feature information and standardized metadata
         model_data = {
             'model': self.model,
             'feature_names': self.feature_names,
             'feature_importance': self.feature_importance,
             'task_type': self.task_type,
             'model_config': self.model_config,
-            'decision_threshold': self.decision_threshold
+            'decision_threshold': self.decision_threshold,
+            'selected_features': self.selected_features,
+            # Feature persistence information
+            'feature_count': self.feature_count,
+            'input_size_actual': self.input_size,
+            'symbol': symbol,
+            'created_at': datetime.now().isoformat(),
+            'model_type': 'lightgbm',
+            # Training configuration
+            'training_config': {
+                'num_leaves': self.num_leaves,
+                'max_depth': self.max_depth,
+                'learning_rate': self.learning_rate,
+                'n_estimators': self.n_estimators,
+                'boosting_type': self.boosting_type,
+                'objective': self.objective,
+                'metric': self.metric
+            }
         }
         
         joblib.dump(model_data, filepath)
-        logger.info(f"Model saved to {filepath}")
+        
+        logger.info(f"LightGBM model saved to {filepath} with {len(self.feature_names)} features")
+        if self.selected_features:
+            logger.info(f"Selected feature indices: {len(self.selected_features)} features")
     
     @classmethod
     def load_model(cls, filepath: str, config: Dict[str, Any]) -> 'LightGBMTrainer':
         """
-        Load a trained model.
+        Load a trained model with feature index restoration.
         
         Args:
             filepath: Path to the saved model
             config: Configuration dictionary
             
         Returns:
-            Loaded LightGBMTrainer instance
+            Loaded LightGBMTrainer instance with restored feature information
         """
         if not os.path.exists(filepath):
             raise FileNotFoundError(f"Model file not found: {filepath}")
@@ -621,122 +681,146 @@ class LightGBMTrainer:
         # Load model data
         model_data = joblib.load(filepath)
 
-        # Create trainer instance
-        trainer = cls(config, task_type=model_data.get('task_type', 'regression'))
+        # Create trainer instance (default to regression, may override based on loaded model)
+        initial_task = model_data.get('task_type', 'regression')
+        trainer = cls(config, task_type=initial_task)
 
-        # Restore model and metadata
-        trainer.model = model_data['model']
+        # Restore model and metadata (support harness artifacts)
+        loaded_model = model_data.get('model')
+        if loaded_model is None:
+            raise ValueError("Loaded artifact is missing the 'model' field")
+        trainer.model = loaded_model
         trainer.feature_names = model_data.get('feature_names', [])
         trainer.feature_importance = model_data.get('feature_importance')
         trainer.decision_threshold = model_data.get('decision_threshold')
 
-        logger.info(f"Model loaded from {filepath}")
+        # Restore feature information for consistency
+        trainer.feature_count = model_data.get('feature_count', len(trainer.feature_names))
+        trainer.input_size = model_data.get('input_size_actual', len(trainer.feature_names))
+        
+        # Restore selected features if present
+        sel = model_data.get('selected_features')
+        if isinstance(sel, (list, tuple, np.ndarray)):
+            trainer.selected_features = list(sel)
+
+        # If artifact included full config, prefer its lightgbm block for inference toggles
+        cfg_in_art = model_data.get('config')
+        if isinstance(cfg_in_art, dict):
+            try:
+                lb = (cfg_in_art.get('models', {}) or {}).get('lightgbm', {})
+                if isinstance(lb, dict):
+                    trainer.model_config.update(lb)
+                    trainer.as_direction = bool(lb.get('as_direction', trainer.as_direction))
+            except Exception:
+                pass
+
+        # Detect classifier vs regressor by model type if task_type missing/mismatched
+        try:
+            from lightgbm import LGBMClassifier as _LGBMClassifier
+            if isinstance(trainer.model, _LGBMClassifier):
+                trainer.task_type = 'classification'
+        except Exception:
+            pass
+
+        # Log feature information
+        logger.info(f"LightGBM model loaded from {filepath}")
+        logger.info(f"Restored {len(trainer.feature_names)} feature names")
+        if trainer.selected_features:
+            logger.info(f"Restored {len(trainer.selected_features)} selected feature indices")
+        
+        # Validate feature consistency
+        if trainer.feature_count != len(trainer.feature_names):
+            logger.warning(f"Feature count mismatch: stored={trainer.feature_count}, actual={len(trainer.feature_names)}")
+
         return trainer
     
     def hyperparameter_tuning(
-        self, 
-        X: Union[pd.DataFrame, np.ndarray], 
+        self,
+        X: Union[pd.DataFrame, np.ndarray],
         y: np.ndarray,
-        param_grid: Optional[Dict[str, List]] = None,
-        cv_folds: int = 3
+        param_grid: Optional[Dict[str, List[Any]]] = None,
+        cv_folds: int = 3,
     ) -> Dict[str, Any]:
-        """
-        Perform hyperparameter tuning using cross-validation.
-        
-        Args:
-            X: Features
-            y: Targets
-            param_grid: Parameter grid for tuning
-            cv_folds: Number of CV folds
-            
-        Returns:
-            Best parameters and results
+        """Perform a simple grid-search with time-series CV.
+
+        Returns a dict containing best params, score and all results.
         """
         if param_grid is None:
             param_grid = {
-                'num_leaves': [31, 50, 100],
-                'max_depth': [6, 8, 10],
-                'learning_rate': [0.05, 0.1, 0.2],
-                'n_estimators': [100, 200, 300]
+                "num_leaves": [31, 50, 100],
+                "max_depth": [6, 8, 10],
+                "learning_rate": [0.05, 0.1, 0.2],
+                "n_estimators": [100, 200, 300],
             }
-        
+
         logger.info("Starting hyperparameter tuning")
-        
-        # Handle feature names
-        if isinstance(X, pd.DataFrame):
-            X_array = X.values
-        else:
-            X_array = X
-        
-        best_score = float('-inf') if self.task_type == "classification" else float('inf')
-        best_params = {}
-        results = []
-        
-        # Simple grid search (can be replaced with more sophisticated methods)
+
+        # Features array
+        X_array = X.values if isinstance(X, pd.DataFrame) else X
+
+        # Tracking
+        best_score: float = float("-inf") if self.task_type == "classification" else float("inf")
+        best_params: Dict[str, Any] = {}
+        results: List[Dict[str, Any]] = []
+
         from itertools import product
-        
+
         param_combinations = list(product(*param_grid.values()))
-        param_names = list(param_grid.keys())
-        
+        param_names: List[str] = [str(k) for k in param_grid.keys()]
+
         for params in param_combinations:
-            param_dict = dict(zip(param_names, params))
-            
-            # Update model parameters
-            for param, value in param_dict.items():
-                setattr(self, param, value)
-            
-            # Build model with new parameters
+            param_dict: Dict[str, Any] = {k: v for k, v in zip(param_names, params)}
+
+            # Apply params
+            for param_name, value in param_dict.items():
+                setattr(self, param_name, value)
+
+            # Build model and CV
             self.build_model()
-            
-            # Cross-validation
             tscv = TimeSeriesSplit(n_splits=cv_folds)
-            
+
             if self.model is not None:
                 if self.task_type == "regression":
                     cv_scores = cross_val_score(
-                        self.model, X_array, y,  # type: ignore
+                        self.model, X_array, y,  # type: ignore[arg-type]
                         cv=tscv,
-                        scoring='neg_mean_squared_error',
-                        n_jobs=-1
+                        scoring="neg_mean_squared_error",
+                        n_jobs=-1,
                     )
-                    mean_score = -cv_scores.mean()  # Convert to positive
+                    mean_score = -cv_scores.mean()
                 else:
                     cv_scores = cross_val_score(
-                        self.model, X_array, y,  # type: ignore
+                        self.model, X_array, y,  # type: ignore[arg-type]
                         cv=tscv,
-                        scoring='accuracy',
-                        n_jobs=-1
+                        scoring="accuracy",
+                        n_jobs=-1,
                     )
                     mean_score = cv_scores.mean()
             else:
                 cv_scores = np.array([0.0])
                 mean_score = 0.0
-            
-            results.append({
-                'params': param_dict.copy(),
-                'mean_score': mean_score,
-                'std_score': cv_scores.std()
-            })
-            
-            # Update best parameters
+
+            results.append(
+                {
+                    "params": param_dict.copy(),
+                    "mean_score": float(mean_score),
+                    "std_score": float(cv_scores.std()),
+                }
+            )
+
             if self.task_type == "classification":
                 if mean_score > best_score:
-                    best_score = mean_score
+                    best_score = float(mean_score)
                     best_params = param_dict.copy()
             else:
                 if mean_score < best_score:
-                    best_score = mean_score
+                    best_score = float(mean_score)
                     best_params = param_dict.copy()
-        
-        # Set best parameters
-        for param, value in best_params.items():
-            setattr(self, param, value)
-        
+
+        for param_name, value in best_params.items():
+            setattr(self, param_name, value)
+
         logger.info(f"Hyperparameter tuning completed - Best score: {best_score:.4f}")
         logger.info(f"Best parameters: {best_params}")
-        
-        return {
-            'best_params': best_params,
-            'best_score': best_score,
-            'all_results': results
-        }
+
+        return {"best_params": best_params, "best_score": best_score, "all_results": results}

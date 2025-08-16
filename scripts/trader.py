@@ -228,7 +228,9 @@ class UnifiedPaperTrader:
             self.models[symbol] = {}
             
             # Load GRU model
-            gru_path = self._find_latest_model(f'gru_model_{symbol}_*.pth') or \
+            # Prefer best walk-forward artifact if available
+            gru_path = self._find_latest_best_wf('gru', symbol) or \
+                       self._find_latest_model(f'gru_model_{symbol}_*.pth') or \
                        self._find_latest_unified_artifact('gru', symbol, 'model.pth')
             if gru_path:
                 try:
@@ -238,7 +240,9 @@ class UnifiedPaperTrader:
                     self.logger.logger.warning(f"Failed to load GRU model for {symbol}: {e}")
             
             # Load LightGBM model
-            lgbm_path = self._find_latest_model(f'lightgbm_model_{symbol}_*.pkl') or \
+            # Prefer best walk-forward artifact if available
+            lgbm_path = self._find_latest_best_wf('lightgbm', symbol) or \
+                        self._find_latest_model(f'lightgbm_model_{symbol}_*.pkl') or \
                         self._find_latest_unified_artifact('lightgbm', symbol, 'model.pkl')
             if lgbm_path:
                 try:
@@ -306,6 +310,34 @@ class UnifiedPaperTrader:
         if model_files:
             return max(model_files, key=os.path.getmtime)
         return None
+
+    def _find_latest_best_wf(self, model_type: str, symbol: str) -> Optional[str]:
+        """Find the latest best walk-forward artifact saved by the harness.
+
+        Looks under models/metadata for files like:
+          - best_wf_lightgbm_{SYMBOL}.pkl
+          - best_wf_gru_{SYMBOL}.pt or .pth
+        Returns newest match by mtime or None.
+        """
+        import glob
+        meta_dir = os.path.join(self.models_dir, 'metadata')
+        if not os.path.isdir(meta_dir):
+            # Also support default relative path if models_dir is not the repo root
+            meta_dir = os.path.join('models', 'metadata')
+        patterns: List[str] = []
+        if model_type == 'lightgbm':
+            patterns.append(os.path.join(meta_dir, f"best_wf_lightgbm_{symbol}.pkl"))
+        elif model_type == 'gru':
+            patterns.append(os.path.join(meta_dir, f"best_wf_gru_{symbol}.pt"))
+            patterns.append(os.path.join(meta_dir, f"best_wf_gru_{symbol}.pth"))
+        else:
+            return None
+        candidates: List[str] = []
+        for pat in patterns:
+            candidates.extend(glob.glob(pat))
+        if not candidates:
+            return None
+        return max(candidates, key=os.path.getmtime)
 
     def _find_latest_unified_artifact(self, model_type: str, symbol: str, filename: str) -> Optional[str]:
         """Find the latest artifact saved by the unified trainer in nested directories.
@@ -818,6 +850,13 @@ class UnifiedPaperTrader:
             
             # Use latest features
             latest_features = features.iloc[-1:].values
+            # If model persisted selected_features indices, subset accordingly
+            sel = getattr(model, 'selected_features', None)
+            if sel is not None and isinstance(sel, (list, tuple, np.ndarray)) and len(sel) > 0:
+                try:
+                    latest_features = latest_features[:, list(sel)]
+                except Exception:
+                    pass
             
             # Validate features
             if np.isnan(latest_features).any() or np.isinf(latest_features).any():

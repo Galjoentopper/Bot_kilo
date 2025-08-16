@@ -90,6 +90,96 @@ def _sanitize_results(res: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def main() -> None:
+    # If run without flags, default to the walk-forward + Optuna harness
+    if len(sys.argv) == 1:
+        try:
+            # Load default config
+            config = load_config('src/config/config.yaml')
+            # Import early so names are bound before use
+            from src.data_pipeline.loader import DataLoader  # type: ignore
+            from scripts.walk_forward_optuna import run_walk_forward_optuna  # type: ignore
+            logger = setup_logging(config)
+
+            # Determine available symbols
+            data_loader = DataLoader('./data')
+            availability = data_loader.check_data_availability()
+            available_symbols = [s for s, ok in availability.items() if ok]
+            if not available_symbols:
+                logger.error('No data available for training!')
+                return
+
+            # Symbols to optimize from config or all available
+            trainer_cfg = config.get('trainer', {}) if isinstance(config, dict) else {}
+            symbols_cfg = trainer_cfg.get('symbols') if isinstance(trainer_cfg.get('symbols'), list) else None
+            symbols = symbols_cfg or available_symbols
+            symbols = [s for s in symbols if s in available_symbols]
+            if not symbols:
+                logger.error('No valid symbols found to optimize')
+                return
+            interval = (
+                trainer_cfg.get('interval')
+                or (config.get('data', {}) or {}).get('interval', '15m')
+            )
+            target_type = trainer_cfg.get('target_type', 'return')
+            target_horizon = int(trainer_cfg.get('default_target_horizon', 1))
+            n_splits = int(trainer_cfg.get('n_splits', 5))
+            embargo = int(trainer_cfg.get('embargo', 100))
+            fee_bps = float(trainer_cfg.get('fee_bps', 10.0))
+            trials = int(trainer_cfg.get('optuna_trials', 30))
+            # Build and optimize per symbol
+            dataset_builder = DatasetBuilder(
+                data_dir='./data',
+                cache_dir='./models/metadata',
+                config=config
+            )
+            for symbol in symbols:
+                X, y, timestamps, feature_names, metadata = dataset_builder.build_dataset(
+                    symbol=symbol,
+                    interval=interval,
+                    use_cache=True,
+                    target_type=target_type,
+                    target_horizon=target_horizon,
+                    start_date=trainer_cfg.get('start_date')
+                )
+                is_valid, errors = dataset_builder.validate_dataset(X, y, metadata)
+                if not is_valid:
+                    logger.error(f"Dataset invalid for {symbol}: {errors}")
+                    continue
+                # Convert to arrays
+                import numpy as _np
+                X_arr = X.values if hasattr(X, 'values') else _np.asarray(X)
+                y_arr = _np.asarray(y)
+                save_best = os.path.join('models', 'metadata', f'best_wf_lightgbm_{symbol}.pkl')
+                res = run_walk_forward_optuna(
+                    model='lightgbm',
+                    X=X_arr,
+                    y=y_arr,
+                    cfg=config,
+                    n_folds=n_splits,
+                    embargo=embargo,
+                    trials=trials,
+                    fees_bps=fee_bps,
+                    save_best=save_best,
+                )
+                logger.info(f"{symbol} best Sharpe: {res.get('best_sharpe')}, saved: {res.get('saved_path')}")
+                # Also run GRU auto by default
+                save_best_gru = os.path.join('models', 'metadata', f'best_wf_gru_{symbol}.pt')
+                res_gru = run_walk_forward_optuna(
+                    model='gru',
+                    X=X_arr,
+                    y=y_arr,
+                    cfg=config,
+                    n_folds=n_splits,
+                    embargo=embargo,
+                    trials=max(10, trials//2),  # fewer trials by default for GRU
+                    fees_bps=fee_bps,
+                    save_best=save_best_gru,
+                )
+                logger.info(f"{symbol} GRU best Sharpe: {res_gru.get('best_sharpe')}, saved: {res_gru.get('saved_path')}")
+            return
+        except Exception as e:
+            print(f"Default walk-forward harness failed: {e}")
+            # Fall through to the regular trainer if default path fails
     parser = argparse.ArgumentParser(
         description='Unified Enhanced Trainer',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter

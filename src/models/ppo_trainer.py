@@ -204,6 +204,13 @@ class PPOTrainer:
         self.eval_env = None
         self.norm_env = None
         self.vecnormalize_path = None
+        
+        # Feature tracking for persistence (observation space metadata)
+        self.feature_names = []  # Environment observation feature names if available
+        self.observation_shape = None  # Shape of observation space
+        self.action_space_info = None  # Information about action space
+        self.input_size = None  # Size of observation space
+        self.feature_count = None
 
         logger.info(f"PPO Trainer initialized with device: {self.device}")
     
@@ -417,7 +424,8 @@ class PPOTrainer:
         train_data: pd.DataFrame,
         eval_data: Optional[pd.DataFrame] = None,
         total_timesteps: int = 100000,
-        experiment_name: str = "ppo_trading"
+        experiment_name: str = "ppo_trading",
+        feature_names: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """
         Train the PPO agent.
@@ -427,6 +435,7 @@ class PPOTrainer:
             eval_data: Evaluation data (optional)
             total_timesteps: Total training timesteps
             experiment_name: MLflow experiment name
+            feature_names: Feature names for training data columns (optional)
             
         Returns:
             Training results dictionary
@@ -435,6 +444,27 @@ class PPOTrainer:
         
         # Create environments
         train_env, eval_env = self.create_environment(train_data, eval_data)
+        
+        # Store environment observation space information for persistence
+        if hasattr(train_env, 'observation_space'):
+            self.observation_shape = train_env.observation_space.shape
+            self.input_size = int(np.prod(self.observation_shape)) if self.observation_shape else None
+            self.feature_count = self.input_size
+        
+        # Store action space information
+        if hasattr(train_env, 'action_space'):
+            if hasattr(train_env.action_space, 'shape'):
+                self.action_space_info = {'type': 'continuous', 'shape': train_env.action_space.shape}
+            elif hasattr(train_env.action_space, 'n'):
+                self.action_space_info = {'type': 'discrete', 'n': train_env.action_space.n}
+        
+        # Store feature names (use data columns or generate defaults)
+        if feature_names:
+            self.feature_names = feature_names
+        elif hasattr(train_data, 'columns'):
+            self.feature_names = list(train_data.columns)
+        else:
+            self.feature_names = [f"feature_{i}" for i in range(len(train_data.columns) if hasattr(train_data, 'columns') else self.input_size or 0)]
         
         # Build model
         self.build_model(train_env)
@@ -635,12 +665,13 @@ class PPOTrainer:
         
         return self.model.predict(observation, deterministic=deterministic)
     
-    def save_model(self, filepath: str):
+    def save_model(self, filepath: str, symbol: Optional[str] = None):
         """
-        Save the trained model.
+        Save the trained model with standardized metadata.
         
         Args:
             filepath: Path to save the model
+            symbol: Optional symbol for symbol-specific models
         """
         if self.model is None:
             raise ValueError("No model to save")
@@ -656,6 +687,7 @@ class PPOTrainer:
             self.model.save(model_path)
 
         # Save VecNormalize stats if present on training env
+        norm_path = None
         if SB3_AVAILABLE:
             try:
                 # Only save if env looks like a VecNormalize instance (has save attr)
@@ -669,19 +701,54 @@ class PPOTrainer:
                 # Don't block on normalization save failure
                 pass
 
-        logger.info(f"PPO model saved to {model_path}")
+        # Save additional metadata for consistency with other trainers
+        base, _ = os.path.splitext(model_path)
+        metadata_path = f"{base}_metadata.json"
+        
+        try:
+            import json
+            metadata = {
+                'model_type': 'ppo',
+                'created_at': datetime.now().isoformat(),
+                'symbol': symbol,
+                'feature_names': self.feature_names,
+                'observation_shape': list(self.observation_shape) if self.observation_shape else None,
+                'action_space_info': self.action_space_info,
+                'input_size': self.input_size,
+                'feature_count': self.feature_count,
+                'vecnormalize_path': norm_path,
+                'model_config': {
+                    'learning_rate': self.learning_rate,
+                    'n_steps': self.n_steps,
+                    'batch_size': self.batch_size,
+                    'n_epochs': self.n_epochs,
+                    'gamma': self.gamma,
+                    'gae_lambda': self.gae_lambda,
+                    'clip_range': self.clip_range,
+                    'ent_coef': self.ent_coef,
+                    'vf_coef': self.vf_coef
+                }
+            }
+            
+            with open(metadata_path, 'w') as f:
+                json.dump(metadata, f, indent=2)
+            logger.info(f"PPO metadata saved to {metadata_path}")
+        except Exception as e:
+            logger.warning(f"Failed to save metadata: {e}")
+
+        logger.info(f"PPO model saved to {model_path} with {len(self.feature_names)} features")
     
     @classmethod
     def load_model(cls, filepath: str, config: Dict[str, Any]) -> 'PPOTrainer':
         """
-        Load a trained model.
+        Load a trained model with metadata restoration.
         
         Args:
             filepath: Path to the saved model
             config: Configuration dictionary
             
         Returns:
-            Loaded PPOTrainer instance
+            Loaded PPOTrainer instance with restored metadata
         """
         if not SB3_AVAILABLE:
             raise ImportError("stable-baselines3 is required for PPO training")
@@ -704,13 +771,40 @@ class PPOTrainer:
         else:
             trainer.model = PPO()
         
-        # Determine VecNormalize stats path if present
+        # Load metadata if available
+        base, _ = os.path.splitext(filepath_with_extension)
+        metadata_path = f"{base}_metadata.json"
+        
         try:
-            base, _ = os.path.splitext(filepath_with_extension)
-            norm_path = f"{base}_vecnormalize.pkl"
-            if os.path.exists(norm_path):
-                trainer.vecnormalize_path = norm_path
-                logger.info(f"VecNormalize stats found at {norm_path}")
+            import json
+            if os.path.exists(metadata_path):
+                with open(metadata_path, 'r') as f:
+                    metadata = json.load(f)
+                
+                # Restore feature information
+                trainer.feature_names = metadata.get('feature_names', [])
+                trainer.observation_shape = tuple(metadata['observation_shape']) if metadata.get('observation_shape') else None
+                trainer.action_space_info = metadata.get('action_space_info')
+                trainer.input_size = metadata.get('input_size')
+                trainer.feature_count = metadata.get('feature_count')
+                trainer.vecnormalize_path = metadata.get('vecnormalize_path')
+                
+                logger.info(f"PPO metadata loaded from {metadata_path}")
+                logger.info(f"Restored {len(trainer.feature_names)} feature names")
+                if trainer.observation_shape:
+                    logger.info(f"Restored observation shape: {trainer.observation_shape}")
+            else:
+                logger.info("No metadata file found, using defaults")
+        except Exception as e:
+            logger.warning(f"Failed to load metadata: {e}")
+        
+        # Determine VecNormalize stats path if present (fallback method)
+        try:
+            if not trainer.vecnormalize_path:
+                norm_path = f"{base}_vecnormalize.pkl"
+                if os.path.exists(norm_path):
+                    trainer.vecnormalize_path = norm_path
+                    logger.info(f"VecNormalize stats found at {norm_path}")
         except Exception:
             pass
         

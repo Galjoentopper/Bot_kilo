@@ -203,6 +203,12 @@ class GRUTrainer:
         self.best_val_loss = float('inf')
         self.best_model_state = None
         
+        # Feature tracking for persistence
+        self.feature_names = []
+        self.selected_features = None  # Indices of selected features
+        self.feature_count = None
+        self.input_size = None
+        
         logger.info("GRU Trainer initialized with GPU optimization")
 
     def _set_seed(self, seed: int, deterministic: bool = False) -> None:
@@ -412,12 +418,14 @@ class GRUTrainer:
         return total_loss / num_batches
     
     def train(
-        self, 
-        X_train: np.ndarray, 
+        self,
+        X_train: np.ndarray,
         y_train: np.ndarray,
-        X_val: np.ndarray, 
+        X_val: np.ndarray,
         y_val: np.ndarray,
-        experiment_name: str = "gru_training"
+        experiment_name: str = "gru_training",
+        feature_names: Optional[List[str]] = None,
+        selected_features: Optional[List[int]] = None
     ) -> Dict[str, Any]:
         """
         Train the GRU model.
@@ -428,15 +436,22 @@ class GRUTrainer:
             X_val: Validation features
             y_val: Validation targets
             experiment_name: MLflow experiment name
+            feature_names: Names of features used
+            selected_features: Indices of selected features
             
         Returns:
             Training results dictionary
         """
         logger.info("Starting GRU model training")
         
+        # Store feature information for persistence
+        self.input_size = X_train.shape[2]  # Features dimension
+        self.feature_count = self.input_size
+        self.feature_names = feature_names or [f"feature_{i}" for i in range(self.input_size)]
+        self.selected_features = selected_features
+        
         # Build model
-        input_size = X_train.shape[2]  # Features dimension
-        self.build_model(input_size)
+        self.build_model(self.input_size)
         
         # Prepare data loaders
         train_loader, val_loader = self.prepare_data(X_train, y_train, X_val, y_val)
@@ -525,7 +540,7 @@ class GRUTrainer:
                 # Save model with signature and input example
                 if self.model is not None and mlflow is not None:
                     # Create a sample input for signature inference
-                    sample_input = torch.randn(1, self.sequence_length, input_size).to(self.device)
+                    sample_input = torch.randn(1, self.sequence_length, self.input_size).to(self.device)
                     
                     # Log model with signature and input example
                     try:
@@ -620,12 +635,13 @@ class GRUTrainer:
         
         return metrics
     
-    def save_model(self, filepath: str):
+    def save_model(self, filepath: str, symbol: Optional[str] = None):
         """
-        Save the trained model.
+        Save the trained model with feature index persistence.
         
         Args:
             filepath: Path to save the model
+            symbol: Optional symbol for symbol-specific models
         """
         if self.model is None:
             raise ValueError("No model to save")
@@ -633,8 +649,8 @@ class GRUTrainer:
         # Create directory if it doesn't exist
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
         
-        # Save model state and configuration
-        torch.save({
+        # Enhanced save with feature information
+        save_data = {
             'model_state_dict': self.best_model_state or self.model.state_dict(),
             'model_config': {
                 'input_size': self.model.input_size,
@@ -646,22 +662,34 @@ class GRUTrainer:
             'training_config': self.model_config,
             'train_losses': self.train_losses,
             'val_losses': self.val_losses,
-            'best_val_loss': self.best_val_loss
-        }, filepath)
+            'best_val_loss': self.best_val_loss,
+            # Feature persistence information
+            'feature_names': self.feature_names,
+            'selected_features': self.selected_features,
+            'feature_count': self.feature_count,
+            'input_size_actual': self.input_size,
+            'symbol': symbol,
+            'created_at': datetime.now().isoformat(),
+            'model_type': 'gru'
+        }
         
-        logger.info(f"Model saved to {filepath}")
+        torch.save(save_data, filepath)
+        
+        logger.info(f"GRU model saved to {filepath} with {len(self.feature_names)} features")
+        if self.selected_features:
+            logger.info(f"Selected feature indices: {len(self.selected_features)} features")
     
     @classmethod
     def load_model(cls, filepath: str, config: Dict[str, Any]) -> 'GRUTrainer':
         """
-        Load a trained model with architecture compatibility.
+        Load a trained model with feature index restoration and architecture compatibility.
         
         Args:
             filepath: Path to the saved model
             config: Configuration dictionary
             
         Returns:
-            Loaded GRUTrainer instance
+            Loaded GRUTrainer instance with restored feature information
         """
         if not os.path.exists(filepath):
             raise FileNotFoundError(f"Model file not found: {filepath}")
@@ -678,18 +706,34 @@ class GRUTrainer:
         trainer.num_layers = model_config['num_layers']
         trainer.dropout = model_config['dropout']
         
+        # Restore feature information
+        trainer.feature_names = checkpoint.get('feature_names', [f"feature_{i}" for i in range(model_config['input_size'])])
+        trainer.selected_features = checkpoint.get('selected_features', None)
+        trainer.feature_count = checkpoint.get('feature_count', model_config['input_size'])
+        trainer.input_size = checkpoint.get('input_size_actual', model_config['input_size'])
+        
         # Build model with saved configuration
         trainer.build_model(model_config['input_size'])
         
         # Load model state
         if trainer.model is not None:
             trainer.model.load_state_dict(checkpoint['model_state_dict'])
+            trainer.model.eval()
         
         # Restore training history
         trainer.train_losses = checkpoint.get('train_losses', [])
         trainer.val_losses = checkpoint.get('val_losses', [])
         trainer.best_val_loss = checkpoint.get('best_val_loss', float('inf'))
+        trainer.best_model_state = checkpoint.get('model_state_dict', None)
         
-        logger.info(f"Model loaded from {filepath} with architecture: {model_config}")
+        # Log feature information
+        logger.info(f"GRU model loaded from {filepath} with architecture: {model_config}")
+        logger.info(f"Restored {len(trainer.feature_names)} feature names")
+        if trainer.selected_features:
+            logger.info(f"Restored {len(trainer.selected_features)} selected feature indices")
+        
+        # Validate feature consistency
+        if trainer.feature_count != model_config['input_size']:
+            logger.warning(f"Feature count mismatch: stored={trainer.feature_count}, model={model_config['input_size']}")
         
         return trainer

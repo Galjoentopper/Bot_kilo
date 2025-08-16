@@ -126,13 +126,14 @@ class BaseModelAdapter(ABC):
         """
         pass
     
-    def save(self, output_dir: str, run_id: Optional[str] = None) -> str:
+    def save(self, output_dir: str, run_id: Optional[str] = None, symbol: Optional[str] = None) -> str:
         """
         Save model and artifacts to directory.
         
         Args:
             output_dir: Base output directory
             run_id: Optional run ID (generated if not provided)
+            symbol: Optional symbol for symbol-specific models
             
         Returns:
             Path to saved model directory
@@ -144,8 +145,11 @@ class BaseModelAdapter(ABC):
         if run_id is None:
             run_id = datetime.now().strftime('%Y%m%d_%H%M%S')
         
-        # Create model directory
-        model_dir = os.path.join(output_dir, self.model_type, run_id)
+        # Create model directory with symbol support
+        if symbol:
+            model_dir = os.path.join(output_dir, self.model_type, symbol, run_id)
+        else:
+            model_dir = os.path.join(output_dir, self.model_type, run_id)
         os.makedirs(model_dir, exist_ok=True)
         
         # Get artifacts
@@ -169,13 +173,17 @@ class BaseModelAdapter(ABC):
                 # Model-specific saving (implemented in subclasses)
                 self._save_model_artifact(artifact, artifact_path)
         
-        # Save metadata
+        # Save metadata with enhanced information
         metadata = {
             'model_type': self.model_type,
             'run_id': run_id,
+            'symbol': symbol,
             'created_at': datetime.now().isoformat(),
             'config': self.model_config,
             'is_fitted': self.is_fitted,
+            'feature_names': getattr(self, 'feature_names', []),
+            'selected_features': getattr(self, 'selected_features', None),
+            'feature_count': getattr(self, 'feature_count', None),
             **self.metadata
         }
         
@@ -183,8 +191,43 @@ class BaseModelAdapter(ABC):
         with open(metadata_path, 'w') as f:
             json.dump(metadata, f, indent=2)
         
+        # Create "latest" symlink for easy access
+        if symbol:
+            latest_path = os.path.join(output_dir, self.model_type, symbol, 'latest')
+            self._create_latest_symlink(model_dir, latest_path)
+        
         logger.info(f"Model saved to {model_dir}")
         return model_dir
+    
+    def _create_latest_symlink(self, target_dir: str, symlink_path: str) -> None:
+        """Create or update 'latest' symlink to point to the most recent model."""
+        # Remove existing symlink if it exists
+        if os.path.exists(symlink_path) or os.path.islink(symlink_path):
+            try:
+                if os.path.islink(symlink_path):
+                    os.unlink(symlink_path)
+                elif os.path.isdir(symlink_path):
+                    import shutil
+                    shutil.rmtree(symlink_path)
+                else:
+                    os.remove(symlink_path)
+            except Exception as e:
+                logger.warning(f"Failed to remove existing latest symlink: {e}")
+        
+        # Create new symlink
+        try:
+            # Use relative path for the symlink target
+            relative_target = os.path.relpath(target_dir, os.path.dirname(symlink_path))
+            os.symlink(relative_target, symlink_path)
+            logger.debug(f"Created latest symlink: {symlink_path} -> {relative_target}")
+        except Exception as e:
+            # On Windows or if symlink fails, create a text file with the path
+            logger.warning(f"Symlink creation failed, creating pointer file instead: {e}")
+            try:
+                with open(symlink_path + '_pointer.txt', 'w') as f:
+                    f.write(target_dir)
+            except Exception as e2:
+                logger.warning(f"Failed to create pointer file: {e2}")
     
     def load(self, model_dir: str) -> None:
         """

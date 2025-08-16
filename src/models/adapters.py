@@ -78,11 +78,16 @@ class GRUAdapter(BaseModelAdapter):
             X_val_scaled, y_val, self.sequence_length
         )
         
-        # Train model
+        # Train model with feature information
+        feature_names = getattr(X, 'columns', None)
+        if feature_names is not None:
+            feature_names = list(feature_names)
+        
         results = self.trainer.train(
             X_train_seq, y_train_seq,
             X_val_seq, y_val_seq,
-            experiment_name=experiment_name
+            experiment_name=experiment_name,
+            feature_names=feature_names
         )
         
         self.model = self.trainer.model
@@ -139,8 +144,9 @@ class GRUAdapter(BaseModelAdapter):
     def _save_model_artifact(self, artifact: Any, path: str) -> None:
         """Save GRU-specific artifacts."""
         if isinstance(artifact, GRUTrainer):
-            # Save PyTorch model
-            artifact.save_model(path + '.pth')
+            # Save PyTorch model with symbol from metadata
+            symbol = self.metadata.get('symbol')
+            artifact.save_model(path + '.pth', symbol=symbol)
         elif isinstance(artifact, DataPreprocessor):
             # Save preprocessor
             artifact.save_preprocessor(path + '.pkl')
