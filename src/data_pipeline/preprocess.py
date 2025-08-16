@@ -74,10 +74,14 @@ class DataPreprocessor:
         else:
             self.feature_names = feature_names or [f"feature_{i}" for i in range(X.shape[1])]
             X_array = X
-        
+        # Pre-sanitize: replace non-finite values
+        X_array = np.asarray(X_array)
+        if not np.isfinite(X_array).all():
+            X_array = np.nan_to_num(X_array, nan=0.0, posinf=1.0, neginf=-1.0)
+
         # Handle missing values
         X_imputed = self.imputer.fit_transform(X_array)
-        
+
         # Fit scaler
         self.scaler.fit(X_imputed)
         
@@ -98,7 +102,7 @@ class DataPreprocessor:
         """
         if not self.is_fitted:
             raise ValueError("Preprocessor must be fitted before transform")
-        
+
         if isinstance(X, pd.DataFrame):
             X_array = X.values
         else:
@@ -108,6 +112,11 @@ class DataPreprocessor:
         if not isinstance(X_array, np.ndarray):
             X_array = np.array(X_array)
         
+        # Pre-sanitize any non-finite before imputation/scaling
+        X_array = np.asarray(X_array)
+        if not np.isfinite(X_array).all():
+            X_array = np.nan_to_num(X_array, nan=0.0, posinf=1.0, neginf=-1.0)
+
         # Handle missing values with more robust approach
         # Check if we have excessive NaN values
         nan_count = np.count_nonzero(np.isnan(X_array))
@@ -142,10 +151,12 @@ class DataPreprocessor:
         if inf_count > 0:
             logger.warning(f"{inf_count} infinite values found after scaling, clipping to finite range")
             X_scaled = np.clip(X_scaled, -1e6, 1e6)  # Clip extreme values
-        
+
         # Ensure all values are finite
         X_scaled = np.where(np.isnan(X_scaled), 0.0, X_scaled)
         X_scaled = np.where(np.isinf(X_scaled), np.clip(X_scaled, -1e6, 1e6), X_scaled)
+        # Final clipping to guard against outliers
+        X_scaled = np.clip(X_scaled, -10.0, 10.0)
         
         return X_scaled
     
@@ -175,7 +186,7 @@ class DataPreprocessor:
         nan_ratio = nan_count / X_array.size if X_array.size > 0 else 0
         if nan_ratio > 0.5:
             logger.warning(f"High NaN ratio ({nan_ratio:.2%}) in input data")
-            
+
         return self.fit(X, feature_names).transform(X)
     
     def create_sequences(

@@ -175,6 +175,8 @@ class GRUTrainer:
         self.num_layers = self.model_config.get('num_layers', 2)
         self.dropout = self.model_config.get('dropout', 0.2)
         self.learning_rate = self.model_config.get('learning_rate', 0.001)
+        # Optimizer selection (default Adam, allow RMSprop/AdamW/SGD via config)
+        self.optimizer_name = str(self.model_config.get('optimizer', 'Adam')).lower()
         self.batch_size = self.model_config.get('batch_size', 64)
         self.epochs = self.model_config.get('epochs', 100)
         self.early_stopping_patience = self.model_config.get('early_stopping_patience', 10)
@@ -208,6 +210,8 @@ class GRUTrainer:
         self.selected_features = None  # Indices of selected features
         self.feature_count = None
         self.input_size = None
+        # Track instability during training
+        self._consecutive_bad_batches = 0
         
         logger.info("GRU Trainer initialized with GPU optimization")
 
@@ -242,12 +246,18 @@ class GRUTrainer:
             output_size=1
         ).to(self.device)
         
-        # Initialize optimizer
-        self.optimizer = optim.Adam(
-            self.model.parameters(),
-            lr=self.learning_rate,
-            weight_decay=1e-5
-        )
+        # Initialize optimizer based on config
+        opt_name = self.optimizer_name
+        params = self.model.parameters()
+        if opt_name == 'rmsprop':
+            self.optimizer = optim.RMSprop(params, lr=self.learning_rate, alpha=0.99, eps=1e-8, weight_decay=1e-5)
+        elif opt_name == 'adamw':
+            self.optimizer = optim.AdamW(params, lr=self.learning_rate, weight_decay=1e-4)
+        elif opt_name == 'sgd':
+            self.optimizer = optim.SGD(params, lr=self.learning_rate, momentum=0.9, weight_decay=1e-5)
+        else:
+            # default Adam
+            self.optimizer = optim.Adam(params, lr=self.learning_rate, weight_decay=1e-5)
         
         # Initialize scheduler
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
@@ -312,13 +322,18 @@ class GRUTrainer:
         val_dataset = TensorDataset(X_val_tensor, y_val_tensor)
         
         # Create data loaders with GPU optimization
+        # Safer persistent_workers on Windows
+        _persistent = True if self.num_workers and self.num_workers > 0 else False
+        if os.name == 'nt':
+            _persistent = False
+
         train_loader = DataLoader(
             train_dataset,
             batch_size=self.batch_size,
             shuffle=True,
             num_workers=self.num_workers,
             pin_memory=(self.pin_memory and self.device.type == 'cuda'),
-            persistent_workers=True if self.num_workers and self.num_workers > 0 else False,
+            persistent_workers=_persistent,
             drop_last=True
         )
         
@@ -328,7 +343,7 @@ class GRUTrainer:
             shuffle=False,
             num_workers=self.num_workers,
             pin_memory=(self.pin_memory and self.device.type == 'cuda'),
-            persistent_workers=True if self.num_workers and self.num_workers > 0 else False
+            persistent_workers=_persistent
         )
         
         logger.info(f"Data loaders prepared - Train: {len(train_loader)} batches, Val: {len(val_loader)} batches")
@@ -353,6 +368,9 @@ class GRUTrainer:
         
         for batch_idx, (data, target) in enumerate(train_loader):
             data, target = data.to(self.device, non_blocking=True), target.to(self.device, non_blocking=True)
+            # Per-batch sanitization to avoid propagating NaN/Inf
+            data = torch.nan_to_num(data, nan=0.0, posinf=1.0, neginf=-1.0)
+            target = torch.nan_to_num(target, nan=0.0, posinf=1.0, neginf=-1.0)
             
             if self.optimizer is None:
                 raise ValueError("Optimizer must be initialized before training")
@@ -369,6 +387,17 @@ class GRUTrainer:
                 # Check for NaN/Inf in loss
                 if torch.isnan(loss) or torch.isinf(loss):
                     logger.warning(f"NaN/Inf loss detected at batch {batch_idx}, skipping batch")
+                    self._consecutive_bad_batches += 1
+                    # Auto-fallback: if too many bad batches, reduce LR and disable AMP
+                    if self._consecutive_bad_batches >= 3:
+                        if self.optimizer is not None:
+                            for g in self.optimizer.param_groups:
+                                g['lr'] = max(g['lr'] * 0.5, 1e-6)
+                        if self.scaler is not None:
+                            # drop AMP for stability
+                            self.mixed_precision = False
+                            self.scaler = None
+                            logger.warning("Disabling mixed precision and reducing LR due to unstable loss")
                     self.optimizer.zero_grad()
                     continue
                 
@@ -379,6 +408,24 @@ class GRUTrainer:
                 if self.max_grad_norm and self.max_grad_norm > 0:
                     self.scaler.unscale_(self.optimizer)
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
+                # Check gradient finiteness
+                _bad_grad = False
+                for p in self.model.parameters():
+                    if p.grad is not None:
+                        if torch.isnan(p.grad).any() or torch.isinf(p.grad).any():
+                            _bad_grad = True
+                            break
+                if _bad_grad:
+                    logger.warning(f"Non-finite gradients at batch {batch_idx}, skipping optimizer step")
+                    self.optimizer.zero_grad(set_to_none=True)
+                    self._consecutive_bad_batches += 1
+                    if self._consecutive_bad_batches >= 3:
+                        for g in self.optimizer.param_groups:
+                            g['lr'] = max(g['lr'] * 0.5, 1e-6)
+                        self.mixed_precision = False
+                        self.scaler = None
+                        logger.warning("Disabling mixed precision due to gradient instability")
+                    continue
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
             else:
@@ -391,6 +438,11 @@ class GRUTrainer:
                 # Check for NaN/Inf in loss
                 if torch.isnan(loss) or torch.isinf(loss):
                     logger.warning(f"NaN/Inf loss detected at batch {batch_idx}, skipping batch")
+                    self._consecutive_bad_batches += 1
+                    # Reduce LR if persistent
+                    if self._consecutive_bad_batches >= 3 and self.optimizer is not None:
+                        for g in self.optimizer.param_groups:
+                            g['lr'] = max(g['lr'] * 0.5, 1e-6)
                     self.optimizer.zero_grad()
                     continue
                 
@@ -405,7 +457,11 @@ class GRUTrainer:
             # Additional safety check for loss value
             if not torch.isfinite(torch.tensor(loss_value)):
                 logger.warning(f"Non-finite loss value {loss_value} at batch {batch_idx}, skipping")
+                self._consecutive_bad_batches += 1
                 continue
+            else:
+                # Reset counter on good batch
+                self._consecutive_bad_batches = 0
                 
             total_loss += loss_value
             num_batches += 1
@@ -440,17 +496,25 @@ class GRUTrainer:
         with torch.no_grad():
             for data, target in val_loader:
                 data, target = data.to(self.device, non_blocking=True), target.to(self.device, non_blocking=True)
+                data = torch.nan_to_num(data, nan=0.0, posinf=1.0, neginf=-1.0)
+                target = torch.nan_to_num(target, nan=0.0, posinf=1.0, neginf=-1.0)
                 
                 if self.mixed_precision and torch.cuda.is_available():
                     with torch.cuda.amp.autocast():
                         if self.model is None:
                             raise ValueError("Model must be built before validation")
                         output = self.model(data)
+                        if torch.isnan(output).any() or torch.isinf(output).any():
+                            logger.warning("Non-finite model output in validation, skipping batch")
+                            continue
                         loss = self.criterion(output, target)
                 else:
                     if self.model is None:
                         raise ValueError("Model must be built before validation")
                     output = self.model(data)
+                    if torch.isnan(output).any() or torch.isinf(output).any():
+                        logger.warning("Non-finite model output in validation, skipping batch")
+                        continue
                     loss = self.criterion(output, target)
                 
                 # Check for NaN/Inf in validation loss
