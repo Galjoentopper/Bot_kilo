@@ -69,31 +69,31 @@ features:
 # Trading Configuration
 trading:
   initial_balance: 10000.0
-  max_position_size: 0.1  # 10% of portfolio
+  max_position_size: 0.25  # 25% of portfolio
   transaction_fee: 0.0025  # 0.25%
   slippage: 0.0005  # 0.05%
   # Ensemble and execution knobs
   model_weights:
-    gru: 0.3
-    lightgbm: 0.3
-    ppo: 0.4
-  ppo_scale: 0.002   # scales PPO action into signal strength
-  min_trade_value: 3.0  # EUR minimum notional per trade
+    gru: 0.2
+    lightgbm: 0.2
+    ppo: 0.6
+  ppo_scale: 0.005   # scales PPO action into signal strength
+  min_trade_value: 2.0  # EUR minimum notional per trade
   # Trader loop cadence (independent of model/data timeframe)
   loop_interval: "30m"
   thresholds:
     # Lower base thresholds to be more aggressive; disable cost floor in paper mode
-    default: 0.00005
+    default: 0.00002
     per_symbol:
-      BTCEUR: 0.00005
-      ETHEUR: 0.00005
-      SOLEUR: 0.00008
-      ADAEUR: 0.00008
-      XRPEUR: 0.00008
+      BTCEUR: 0.00002
+      ETHEUR: 0.00002
+      SOLEUR: 0.00005
+      ADAEUR: 0.00005
+      XRPEUR: 0.00005
     use_cost_floor: false
     cost_floor_multiplier: 1.0
     vol_reference: 0.02
-    vol_bounds: [0.5, 1.5]
+    vol_bounds: [0.5, 1.8]
   
 # Risk Management
 risk:
