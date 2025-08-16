@@ -233,7 +233,7 @@ def objective_factory(model_name: str, cfg: Dict[str, Any], X: np.ndarray, y: np
             gru_cfg['hidden_size'] = trial.suggest_int('hidden_size', 32, 256)
             gru_cfg['num_layers'] = trial.suggest_int('num_layers', 1, 4)
             gru_cfg['dropout'] = trial.suggest_float('dropout', 0.0, 0.5)
-            gru_cfg['learning_rate'] = trial.suggest_float('learning_rate', 1e-4, 5e-3, log=True)
+            gru_cfg['learning_rate'] = trial.suggest_float('learning_rate', 1e-5, 1e-3, log=True)
             gru_cfg['batch_size'] = trial.suggest_categorical('batch_size', [32, 64, 128])
         else:
             raise ValueError("Unsupported model for HPO")

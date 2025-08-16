@@ -266,10 +266,10 @@ class GRUTrainer:
         return self.model
     
     def prepare_data(
-        self, 
-        X_train: np.ndarray, 
+        self,
+        X_train: np.ndarray,
         y_train: np.ndarray,
-        X_val: np.ndarray, 
+        X_val: np.ndarray,
         y_val: np.ndarray
     ) -> Tuple[DataLoader, DataLoader]:
         """
@@ -284,6 +284,23 @@ class GRUTrainer:
         Returns:
             Tuple of (train_loader, val_loader)
         """
+        # Validate input data for NaN/Inf values
+        if not np.isfinite(X_train).all():
+            logger.warning("Non-finite values detected in X_train, replacing with zeros")
+            X_train = np.nan_to_num(X_train, nan=0.0, posinf=1.0, neginf=-1.0)
+        
+        if not np.isfinite(y_train).all():
+            logger.warning("Non-finite values detected in y_train, replacing with zeros")
+            y_train = np.nan_to_num(y_train, nan=0.0, posinf=1.0, neginf=-1.0)
+            
+        if not np.isfinite(X_val).all():
+            logger.warning("Non-finite values detected in X_val, replacing with zeros")
+            X_val = np.nan_to_num(X_val, nan=0.0, posinf=1.0, neginf=-1.0)
+            
+        if not np.isfinite(y_val).all():
+            logger.warning("Non-finite values detected in y_val, replacing with zeros")
+            y_val = np.nan_to_num(y_val, nan=0.0, posinf=1.0, neginf=-1.0)
+        
         # Convert to tensors
         X_train_tensor = torch.FloatTensor(X_train)
         y_train_tensor = torch.FloatTensor(y_train).unsqueeze(1)
@@ -349,6 +366,12 @@ class GRUTrainer:
                     output = self.model(data)
                     loss = self.criterion(output, target)
                 
+                # Check for NaN/Inf in loss
+                if torch.isnan(loss) or torch.isinf(loss):
+                    logger.warning(f"NaN/Inf loss detected at batch {batch_idx}, skipping batch")
+                    self.optimizer.zero_grad()
+                    continue
+                
                 self.scaler.scale(loss).backward()
                 if self.scaler is None or self.optimizer is None:
                     raise ValueError("Scaler and optimizer must be initialized")
@@ -364,6 +387,13 @@ class GRUTrainer:
                     raise ValueError("Model must be built before training")
                 output = self.model(data)
                 loss = self.criterion(output, target)
+                
+                # Check for NaN/Inf in loss
+                if torch.isnan(loss) or torch.isinf(loss):
+                    logger.warning(f"NaN/Inf loss detected at batch {batch_idx}, skipping batch")
+                    self.optimizer.zero_grad()
+                    continue
+                
                 loss.backward()
                 if self.optimizer is None:
                     raise ValueError("Optimizer must be initialized before training")
@@ -371,12 +401,23 @@ class GRUTrainer:
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
                 self.optimizer.step()
             
-            total_loss += loss.item()
+            loss_value = loss.item()
+            # Additional safety check for loss value
+            if not torch.isfinite(torch.tensor(loss_value)):
+                logger.warning(f"Non-finite loss value {loss_value} at batch {batch_idx}, skipping")
+                continue
+                
+            total_loss += loss_value
             num_batches += 1
             
             # Log progress every 100 batches
             if batch_idx % 100 == 0:
                 logger.debug(f"Batch {batch_idx}/{len(train_loader)}, Loss: {loss.item():.6f}")
+        
+        # Return NaN if no valid batches processed
+        if num_batches == 0:
+            logger.warning("No valid batches in training, returning NaN")
+            return float('nan')
         
         return total_loss / num_batches
     
@@ -412,8 +453,19 @@ class GRUTrainer:
                     output = self.model(data)
                     loss = self.criterion(output, target)
                 
-                total_loss += loss.item()
+                # Check for NaN/Inf in validation loss
+                loss_value = loss.item()
+                if not torch.isfinite(torch.tensor(loss_value)):
+                    logger.warning(f"Non-finite validation loss detected, skipping batch")
+                    continue
+                
+                total_loss += loss_value
                 num_batches += 1
+        
+        # Return NaN if no valid batches processed
+        if num_batches == 0:
+            logger.warning("No valid batches in validation, returning NaN")
+            return float('nan')
         
         return total_loss / num_batches
     
@@ -489,6 +541,11 @@ class GRUTrainer:
                 
                 # Validate
                 val_loss = self.validate_epoch(val_loader)
+                
+                # Check for NaN/Inf validation loss
+                if not torch.isfinite(torch.tensor(val_loss)):
+                    logger.error(f"Non-finite validation loss {val_loss} at epoch {epoch+1}, stopping training")
+                    break
                 
                 # Update scheduler
                 if self.scheduler is not None:
