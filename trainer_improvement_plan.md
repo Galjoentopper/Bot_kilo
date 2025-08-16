@@ -55,7 +55,7 @@ graph TB
 **Purpose**: Massive speed-up by avoiding redundant feature computation.
 
 **Key Features**:
-- Cache features as parquet files: `data/features/{symbol}_{interval}_{hash}.parquet`
+- Cache features as parquet files: `models/metadata/{symbol}_{interval}_{hash}.parquet`
 - Feature signature hash based on feature names + parameters
 - Automatic cache invalidation when features change
 - Compression for efficient storage
@@ -71,7 +71,7 @@ graph TB
 - Validate metadata before training
 - Fail fast on mismatches
 
-**Location**: `data/features/{symbol}_{interval}_{hash}_metadata.json`
+**Location**: `models/metadata/{symbol}_{interval}_{hash}_metadata.json`
 
 ### 4. Time-Series Cross-Validation
 **Purpose**: Realistic validation without data leakage.

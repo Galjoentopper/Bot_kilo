@@ -139,7 +139,7 @@ def main() -> None:
 
     dataset_builder = DatasetBuilder(
         data_dir=args.data_dir,
-        cache_dir=os.path.join(args.data_dir, 'features'),
+        cache_dir="./models/metadata",
         config=config
     )
 
@@ -225,7 +225,8 @@ def main() -> None:
 
     default_models = trainer_cfg.get('default_models')
     if args.models is None:
-        model_list = default_models if isinstance(default_models, list) else ['lightgbm','gru']
+        # If not specified in CLI or config, include PPO by default alongside GRU and LightGBM
+        model_list = default_models if isinstance(default_models, list) else ['lightgbm','gru','ppo']
     else:
         model_list = ['gru','lightgbm','ppo'] if args.models == ['all'] else args.models
 

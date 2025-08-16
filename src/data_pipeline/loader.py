@@ -95,6 +95,12 @@ class DataLoader:
         
         query += " ORDER BY timestamp"
         
+        if limit:
+            query += f" DESC LIMIT {limit}"
+            need_reverse = True
+        else:
+            need_reverse = False
+        
         # Load data
         try:
             conn = sqlite3.connect(db_path)

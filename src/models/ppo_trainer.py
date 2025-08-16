@@ -21,6 +21,7 @@ try:
     from stable_baselines3.common.callbacks import BaseCallback as SB3_BaseCallback, EvalCallback as SB3_EvalCallback  # type: ignore[import-untyped]
     from stable_baselines3.common.monitor import Monitor as SB3_Monitor  # type: ignore[import-untyped]
     from stable_baselines3.common.vec_env import DummyVecEnv as SB3_DummyVecEnv, SubprocVecEnv  # type: ignore[import-untyped]
+    from stable_baselines3.common.vec_env import VecNormalize  # type: ignore[import-untyped]
     SB3_AVAILABLE = True
     
 except ImportError:
@@ -69,6 +70,14 @@ except ImportError:
     class SubprocVecEnv:
         def __init__(self, env_fns: List[Any]) -> None:
             self.env_fns = env_fns
+    
+    class VecNormalize:  # type: ignore
+        def __init__(self, env: Any, *args: Any, **kwargs: Any) -> None:
+            self.env = env
+        def save(self, path: str) -> None:
+            pass
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self.env, name)
     
     SB3_AVAILABLE = False
 
@@ -161,19 +170,15 @@ class PPOTrainer:
     """
     
     def __init__(self, config: Dict[str, Any]):
-        """
-        Initialize PPO trainer.
-        
-        Args:
-            config: Configuration dictionary
-        """
+        """Initialize PPO trainer."""
         if not SB3_AVAILABLE:
             raise ImportError("stable-baselines3 is required for PPO training")
-        
+
+        # Configs
         self.config = config
         self.model_config = config.get('models', {}).get('ppo', {})
         self.training_config = config.get('training', {})
-        
+
         # PPO parameters
         self.learning_rate = self.model_config.get('learning_rate', 0.0003)
         self.n_steps = self.model_config.get('n_steps', 4096)
@@ -184,20 +189,22 @@ class PPOTrainer:
         self.clip_range = self.model_config.get('clip_range', 0.2)
         self.ent_coef = self.model_config.get('ent_coef', 0.01)
         self.vf_coef = self.model_config.get('vf_coef', 0.5)
-        
+
         # Training settings
         self.total_timesteps = 100000
         self.eval_freq = 5000
         self.n_eval_episodes = 10
-        
+
         # Device configuration
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        
+
         # Model and environment
         self.model = None
         self.env = None
         self.eval_env = None
-        
+        self.norm_env = None
+        self.vecnormalize_path = None
+
         logger.info(f"PPO Trainer initialized with device: {self.device}")
     
     def create_environment(
@@ -225,20 +232,30 @@ class PPOTrainer:
         if eval_data is not None:
             self._validate_data(eval_data, "evaluation")
         
-        # Default environment parameters
+        # Default environment parameters (30m crypto tuned)
         default_kwargs = {
             'initial_balance': 10000.0,
-            'transaction_fee': 0.001,
-            'slippage': 0.0005,
-            'max_position_size': 0.1,
-            'lookback_window': 20
+            'transaction_fee': 0.0006,
+            'slippage': 0.0003,
+            'max_position_size': 0.5,
+            'lookback_window': 32,
+            'reward_mode': 'pnl_pct'
         }
         if env_kwargs:
             default_kwargs.update(env_kwargs)
         
         # Create training environment
         def make_train_env(*args, **kwargs):
-            env = TradingEnvironment(train_data, **default_kwargs)
+            # Domain randomization over time windows
+            total = len(train_data)
+            min_len = default_kwargs['lookback_window'] + 512
+            if total > min_len:
+                start_max = max(0, total - min_len - 1)
+                start = np.random.randint(0, max(1, start_max + 1))
+                end = min(total, start + np.random.randint(min_len, min(total - start, 4096)))
+                env = TradingEnvironment(train_data, window_start=start, window_end=end, **default_kwargs)
+            else:
+                env = TradingEnvironment(train_data, **default_kwargs)
             env = Monitor(env)
             return env
         
@@ -258,6 +275,20 @@ class PPOTrainer:
         # Create environment functions that are picklable
         env_fns = [make_env_fn(train_data, default_kwargs) for _ in range(n_envs)]
         self.env = SubprocVecEnv(env_fns)
+        # Wrap with normalization (train)
+        if SB3_AVAILABLE:
+            try:
+                self.env = VecNormalize(
+                    self.env,
+                    training=True,
+                    norm_obs=True,
+                    norm_reward=True,
+                    gamma=float(default_kwargs.get('reward_gamma', self.gamma)),
+                    clip_obs=10.0,
+                    clip_reward=10.0,
+                )
+            except Exception:
+                pass
         
         # Create evaluation environment if eval data provided
         if eval_data is not None:
@@ -268,6 +299,28 @@ class PPOTrainer:
             
             # For evaluation, we typically use a single environment
             self.eval_env = DummyVecEnv([make_eval_env])
+            # Wrap eval with VecNormalize (in eval mode) and load stats if available
+            if SB3_AVAILABLE:
+                try:
+                    if self.vecnormalize_path and os.path.exists(self.vecnormalize_path):
+                        # Load saved normalization statistics
+                        self.eval_env = VecNormalize.load(self.vecnormalize_path, self.eval_env)  # type: ignore[attr-defined]
+                        # Ensure eval settings
+                        if hasattr(self.eval_env, 'training'):
+                            self.eval_env.training = False  # type: ignore[attr-defined]
+                        if hasattr(self.eval_env, 'norm_reward'):
+                            self.eval_env.norm_reward = False  # type: ignore[attr-defined]
+                    else:
+                        # Fall back to wrapping without loaded stats
+                        self.eval_env = VecNormalize(
+                            self.eval_env,
+                            training=False,
+                            norm_obs=True,
+                            norm_reward=False,
+                            clip_obs=10.0,
+                        )
+                except Exception:
+                    pass
         else:
             self.eval_env = None
         
@@ -323,24 +376,29 @@ class PPOTrainer:
         """
         # Policy network configuration with gradient clipping
         policy_kwargs = {
-            'net_arch': [dict(pi=[128, 128], vf=[128, 128])],  # Smaller network to reduce NaN risk
-            'activation_fn': nn.Tanh,  # Use Tanh instead of ReLU for better gradient stability
-            'ortho_init': False,  # Disable orthogonal initialization which can cause issues
+            'net_arch': [dict(pi=[256, 128], vf=[256, 128])],
+            'activation_fn': nn.Tanh,
+            'ortho_init': True,
         }
         
         # Create PPO model with conservative parameters
         if SB3_AVAILABLE:
+            def lr_schedule(progress_remaining: float) -> float:
+                # Linear decay from base LR to a floor
+                base_lr = float(self.learning_rate)
+                return max(1e-5, base_lr * float(progress_remaining))
+
             self.model = SB3_PPO(
                 policy='MlpPolicy',
                 env=env,
-                learning_rate=self.learning_rate,
-                n_steps=self.n_steps,
-                batch_size=self.batch_size,
-                n_epochs=self.n_epochs,
-                gamma=self.gamma,
-                gae_lambda=self.gae_lambda,
-                clip_range=self.clip_range,
-                ent_coef=self.ent_coef,
+                learning_rate=lr_schedule,
+                n_steps=max(1024, int(self.n_steps)),
+                batch_size=min(1024, max(128, int(self.batch_size))),
+                n_epochs=max(10, int(self.n_epochs)),
+                gamma=min(0.999, max(0.97, float(self.gamma))),
+                gae_lambda=min(0.99, max(0.9, float(self.gae_lambda))),
+                clip_range=min(0.3, max(0.1, float(self.clip_range))),
+                ent_coef=min(0.02, max(0.0, float(self.ent_coef))),
                 vf_coef=self.vf_coef,
                 max_grad_norm=0.5,  # Add gradient clipping
                 policy_kwargs=policy_kwargs,
@@ -434,6 +492,7 @@ class PPOTrainer:
                 # Save the model
                 model_path = f"ppo_model_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
                 self.model.save(model_path)
+                # Optionally, VecNormalize stats could be saved here if needed
                 
                 # Log model with signature and input example
                 # For Stable Baselines3 models, we'll log the artifact with additional metadata
@@ -485,60 +544,79 @@ class PPOTrainer:
             raise ValueError("Model must be trained before evaluation")
         
         logger.info(f"Evaluating PPO agent for {n_episodes} episodes")
-        
-        # Create evaluation environment
-        eval_env = TradingEnvironment(eval_data)
-        
-        episode_rewards = []
-        episode_lengths = []
-        portfolio_stats = []
-        
-        for episode in range(n_episodes):
+
+        # Match evaluation env lookback_window to the model's observation shape (first dim)
+        try:
+            obs_shape = getattr(self.model, 'observation_space', None).shape  # type: ignore[attr-defined]
+            lookback_window = int(obs_shape[0]) if obs_shape and len(obs_shape) >= 1 else 32
+        except Exception:
+            lookback_window = 32
+
+        env_kwargs = {
+            'initial_balance': 10000.0,
+            'transaction_fee': 0.0006,
+            'slippage': 0.0003,
+            'max_position_size': 0.5,
+            'lookback_window': lookback_window,
+            'reward_mode': 'pnl_pct',
+        }
+
+        # Create evaluation environment with aligned shape
+        eval_env = TradingEnvironment(eval_data, **env_kwargs)
+
+        episode_rewards: List[float] = []
+        episode_lengths: List[int] = []
+        portfolio_stats: List[Dict[str, Any]] = []
+
+        for _ in range(n_episodes):
             obs, _ = eval_env.reset()
-            episode_reward = 0
+            episode_reward: float = 0.0
             episode_length = 0
             done = False
-            
+
             while not done:
                 if self.model is not None:
                     action, _ = self.model.predict(obs, deterministic=deterministic)
-                    # Ensure action is numpy array
                     if not isinstance(action, np.ndarray):
                         action = np.array([action])
                 else:
-                    action = np.array([0])  # Default action as numpy array
-                
-                obs, reward, terminated, truncated, info = eval_env.step(action)
-                done = terminated or truncated
-                    
-                episode_reward += reward
+                    action = np.array([0])
+
+                obs, reward, terminated, truncated, _ = eval_env.step(action)
+                done = bool(terminated or truncated)
+
+                episode_reward += float(np.array(reward).astype(np.float32))
                 episode_length += 1
-            
+
             episode_rewards.append(episode_reward)
             episode_lengths.append(episode_length)
-            
-            # Get portfolio statistics for this episode
-            stats = eval_env.get_portfolio_stats()
+
+            try:
+                if hasattr(eval_env, 'get_portfolio_stats'):
+                    stats = eval_env.get_portfolio_stats()  # type: ignore[attr-defined]
+                else:
+                    stats = {}
+            except Exception:
+                stats = {}
             portfolio_stats.append(stats)
-        
-        # Calculate aggregate statistics
+
         results = {
-            "mean_episode_reward": np.mean(episode_rewards),
-            "std_episode_reward": np.std(episode_rewards),
-            "mean_episode_length": np.mean(episode_lengths),
+            "mean_episode_reward": float(np.mean(episode_rewards)) if episode_rewards else 0.0,
+            "std_episode_reward": float(np.std(episode_rewards)) if episode_rewards else 0.0,
+            "mean_episode_length": float(np.mean(episode_lengths)) if episode_lengths else 0.0,
             "episode_rewards": episode_rewards,
             "episode_lengths": episode_lengths,
             "portfolio_stats": portfolio_stats,
-            "mean_total_return": np.mean([stats.get('total_return', 0) for stats in portfolio_stats]),
-            "mean_sharpe_ratio": np.mean([stats.get('sharpe_ratio', 0) for stats in portfolio_stats]),
-            "mean_max_drawdown": np.mean([stats.get('max_drawdown', 0) for stats in portfolio_stats]),
-            "mean_win_rate": np.mean([stats.get('win_rate', 0) for stats in portfolio_stats])
+            "mean_total_return": float(np.mean([s.get('total_return', 0.0) for s in portfolio_stats])) if portfolio_stats else 0.0,
+            "mean_sharpe_ratio": float(np.mean([s.get('sharpe_ratio', 0.0) for s in portfolio_stats])) if portfolio_stats else 0.0,
+            "mean_max_drawdown": float(np.mean([s.get('max_drawdown', 0.0) for s in portfolio_stats])) if portfolio_stats else 0.0,
+            "mean_win_rate": float(np.mean([s.get('win_rate', 0.0) for s in portfolio_stats])) if portfolio_stats else 0.0,
         }
-        
+
         logger.info(f"Evaluation completed - Mean reward: {results['mean_episode_reward']:.4f}")
         logger.info(f"Mean total return: {results['mean_total_return']:.4f}")
         logger.info(f"Mean Sharpe ratio: {results['mean_sharpe_ratio']:.4f}")
-        
+
         return results
     
     def predict(self, observation: np.ndarray, deterministic: bool = True) -> Tuple[np.ndarray, Optional[np.ndarray]]:
@@ -570,10 +648,28 @@ class PPOTrainer:
         # Create directory if it doesn't exist
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
         
+        # Normalize filepath extension
+        model_path = filepath if filepath.endswith('.zip') else f"{filepath}.zip"
+
         # Save model
         if self.model is not None:
-            self.model.save(filepath)
-        logger.info(f"PPO model saved to {filepath}")
+            self.model.save(model_path)
+
+        # Save VecNormalize stats if present on training env
+        if SB3_AVAILABLE:
+            try:
+                # Only save if env looks like a VecNormalize instance (has save attr)
+                if hasattr(self.env, 'save'):
+                    base, _ = os.path.splitext(model_path)
+                    norm_path = f"{base}_vecnormalize.pkl"
+                    self.env.save(norm_path)  # type: ignore[attr-defined]
+                    self.vecnormalize_path = norm_path
+                    logger.info(f"VecNormalize stats saved to {norm_path}")
+            except Exception:
+                # Don't block on normalization save failure
+                pass
+
+        logger.info(f"PPO model saved to {model_path}")
     
     @classmethod
     def load_model(cls, filepath: str, config: Dict[str, Any]) -> 'PPOTrainer':
@@ -604,9 +700,19 @@ class PPOTrainer:
         
         # Load model
         if SB3_AVAILABLE:
-            trainer.model = SB3_PPO.load(filepath)
+            trainer.model = SB3_PPO.load(filepath_with_extension)
         else:
             trainer.model = PPO()
+        
+        # Determine VecNormalize stats path if present
+        try:
+            base, _ = os.path.splitext(filepath_with_extension)
+            norm_path = f"{base}_vecnormalize.pkl"
+            if os.path.exists(norm_path):
+                trainer.vecnormalize_path = norm_path
+                logger.info(f"VecNormalize stats found at {norm_path}")
+        except Exception:
+            pass
         
         logger.info(f"PPO model loaded from {filepath_with_extension}")
         return trainer

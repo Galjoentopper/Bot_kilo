@@ -32,7 +32,7 @@ class DatasetBuilder:
     def __init__(
         self,
         data_dir: str = "./data",
-        cache_dir: str = "./data/features",
+        cache_dir: str = "./models/metadata",
         config: Optional[Dict[str, Any]] = None
     ):
         """

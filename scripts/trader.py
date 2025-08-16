@@ -23,6 +23,7 @@ import ccxt
 import sqlite3
 import pickle
 from typing import Optional, Dict, Any, Tuple, List
+import logging
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -170,8 +171,8 @@ class UnifiedPaperTrader:
         self.transaction_fee = trading_config.get('transaction_fee', 0.001)
         self.slippage = trading_config.get('slippage', 0.0005)
         self.max_position_size = trading_config.get('max_position_size', 0.1)
-        # Optimization knobs
-        self.model_weights = trading_config.get('model_weights', {'gru': 0.3, 'lightgbm': 0.3, 'ppo': 0.4})
+        # Optimization knobs - FIXED: Rebalanced weights to account for PPO's larger magnitude
+        self.model_weights = trading_config.get('model_weights', {'gru': 0.45, 'lightgbm': 0.45, 'ppo': 0.1})
         self.ppo_scale = trading_config.get('ppo_scale', 0.002)
         self.min_trade_value = trading_config.get('min_trade_value', 5.0)
         
@@ -335,44 +336,23 @@ class UnifiedPaperTrader:
             self.logger.logger.debug("Using cached market data")
             return self.data_cache.copy()
         
-        # Import DatasetBuilder for consistent data pipeline
-        from src.data_pipeline.dataset_builder import DatasetBuilder
-        from src.data_pipeline.loader import DataLoader
-        
-        # Initialize components using the same pipeline as training
+        # Initialize components for feature generation only (no database loading)
         try:
-            dataset_builder = DatasetBuilder(data_dir="./data", config=self.config)
-            data_loader = DataLoader("./data")
-            
-            # Get recent data from local database + latest live data
+            # Get data directly from Binance API for each symbol
             for symbol in self.symbols:
                 try:
-                    # Step 1: Load recent historical data from SQLite (same as training)
-                    # Get sufficient historical data for feature calculation (at least 200 periods for proper technical indicators)
-                    historical_df = data_loader.load_symbol_data(
-                        symbol=symbol,
-                        interval=self.interval,  # Use 30m as configured
-                        limit=300  # More data for better feature calculation
-                    )
+                    # Fetch 300 30-minute candles directly from Binance API
+                    self.logger.logger.info(f"Fetching {symbol} data directly from Binance API...")
+                    api_df = await self._fetch_data_from_binance_api(symbol, limit=300)
                     
-                    if historical_df.empty:
-                        self.logger.logger.warning(f"No historical data found for {symbol}")
+                    if api_df is None or api_df.empty:
+                        self.logger.logger.warning(f"No data fetched from API for {symbol}")
                         continue
                     
-                    # Step 2: Fetch latest live data from Binance to supplement
-                    live_df = await self._fetch_live_data_supplement(symbol)
+                    # Generate features using the same FeatureEngine as training
+                    df_with_features = self.feature_engine.generate_all_features(api_df)
                     
-                    # Step 3: Combine historical + live data
-                    if live_df is not None and not live_df.empty:
-                        # Merge, ensuring no duplicates and proper chronological order
-                        combined_df = self._merge_historical_and_live_data(historical_df, live_df)
-                    else:
-                        combined_df = historical_df
-                    
-                    # Step 4: Generate features using the same FeatureEngine as training
-                    df_with_features = self.feature_engine.generate_all_features(combined_df)
-                    
-                    # Step 5: Ensure feature alignment with training metadata
+                    # Ensure feature alignment with training metadata
                     feature_names = self.symbol_feature_metadata.get(symbol, [])
                     if feature_names:
                         # Align features exactly as in training
@@ -383,27 +363,25 @@ class UnifiedPaperTrader:
                                 df_aligned[col] = df_with_features[col]
                         df_with_features = df_aligned
                     
-                    # Step 6: Robust NaN handling (same as training)
+                    # Robust NaN handling (same as training)
                     df_with_features = self._clean_features_for_inference(df_with_features, symbol)
                     
                     if self._validate_market_data(df_with_features, symbol):
                         market_data[symbol] = df_with_features
                         self.last_prices[symbol] = df_with_features['close'].iloc[-1]
-                        self.logger.logger.info(f"Loaded {len(df_with_features)} records for {symbol} with {len(feature_names)} features")
+                        self.logger.logger.info(f"Fetched {len(df_with_features)} records for {symbol} with {len(feature_names)} features via API")
                     else:
                         self.logger.logger.warning(f"Invalid market data for {symbol}")
                         
                 except Exception as e:
                     self.logger.logger.error(f"Error processing data for {symbol}: {e}")
-                    # Fallback to direct API fetch if database method fails
-                    fallback_data = await self._get_fallback_market_data(symbol)
-                    if fallback_data is not None:
-                        market_data[symbol] = fallback_data
+                    # Skip this symbol and continue with others
+                    continue
         
         except Exception as e:
-            self.logger.logger.error(f"Error in enhanced data pipeline: {e}")
-            # Fallback to original method if enhanced pipeline fails
-            return await self._get_fallback_market_data_all()
+            self.logger.logger.error(f"Error in API data pipeline: {e}")
+            # Return empty dict if the whole pipeline fails
+            return {}
         
         # Update cache
         self.data_cache = market_data.copy()
@@ -495,6 +473,52 @@ class UnifiedPaperTrader:
         except Exception as e:
             self.logger.logger.warning(f"Error merging historical and live data: {e}")
             return historical_df
+    
+    async def _fetch_data_from_binance_api(self, symbol: str, limit: int = 300) -> Optional[pd.DataFrame]:
+        """Fetch data directly from Binance API for the specified number of candles."""
+        try:
+            exchange = ccxt.binance({
+                'enableRateLimit': True,
+                'options': {'defaultType': 'spot'},
+                'timeout': 30000
+            })
+            exchange.load_markets()
+            
+            formatted_symbol = self._convert_symbol_format(symbol)
+            self.logger.logger.info(f"Fetching {limit} {self.interval} candles for {symbol} from Binance API")
+            
+            # Fetch the specified number of candles
+            ohlcv = await self._fetch_with_retry(exchange, formatted_symbol, limit=limit)
+            
+            if ohlcv:
+                df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                df['datetime'] = pd.to_datetime(df['timestamp'], unit='ms')
+                df = df.set_index('datetime')
+                
+                # Add missing columns to match training data format
+                df['quote_volume'] = df['volume']  # Approximate quote volume
+                df['trades'] = 0  # Not available from basic OHLCV
+                df['taker_buy_base'] = df['volume'] * 0.5  # Rough approximation
+                df['taker_buy_quote'] = df['quote_volume'] * 0.5  # Rough approximation
+                
+                # Ensure numeric columns
+                numeric_cols = ['open', 'high', 'low', 'close', 'volume', 'quote_volume', 'taker_buy_base', 'taker_buy_quote']
+                for col in numeric_cols:
+                    if col in df.columns:
+                        df[col] = pd.to_numeric(df[col], errors='coerce')
+                
+                # Remove any NaN rows
+                df = df.dropna()
+                
+                self.logger.logger.info(f"Successfully fetched {len(df)} records for {symbol} from API")
+                return df
+            else:
+                self.logger.logger.warning(f"No OHLCV data returned from API for {symbol}")
+                return None
+                
+        except Exception as e:
+            self.logger.logger.error(f"Failed to fetch data from API for {symbol}: {e}")
+            return None
     
     def _clean_features_for_inference(self, df: pd.DataFrame, symbol: str) -> pd.DataFrame:
         """Clean features for inference using the same method as training."""
@@ -879,6 +903,16 @@ class UnifiedPaperTrader:
             total_weight = sum(weights.get(model, 1.0) for model, _ in predictions)
             
             avg_prediction = weighted_sum / total_weight if total_weight > 0 else 0.0
+            
+            # Enhanced debug logging for model contributions
+            if self.logger.logger.isEnabledFor(logging.DEBUG):
+                contribution_details = []
+                for model, pred in predictions:
+                    weight = weights.get(model, 1.0)
+                    contribution = weight * pred
+                    contribution_pct = (contribution / avg_prediction * 100) if avg_prediction != 0 else 0
+                    contribution_details.append(f"{model}={pred:.6f}(w:{weight:.2f},c:{contribution:.6f},{contribution_pct:.1f}%)")
+                self.logger.logger.debug(f"Model contributions for {symbol}: {', '.join(contribution_details)}")
             
             # Calculate dynamic threshold based on recent volatility
             threshold = self._get_dynamic_threshold(symbol, df)
