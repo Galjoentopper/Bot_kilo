@@ -365,17 +365,17 @@ class GRUTrainer:
         self.model.train()
         total_loss = 0.0
         num_batches = 0
-        
+
         for batch_idx, (data, target) in enumerate(train_loader):
             data, target = data.to(self.device, non_blocking=True), target.to(self.device, non_blocking=True)
             # Per-batch sanitization to avoid propagating NaN/Inf
             data = torch.nan_to_num(data, nan=0.0, posinf=1.0, neginf=-1.0)
             target = torch.nan_to_num(target, nan=0.0, posinf=1.0, neginf=-1.0)
-            
+
             if self.optimizer is None:
                 raise ValueError("Optimizer must be initialized before training")
             self.optimizer.zero_grad()
-            
+
             if self.mixed_precision and self.scaler:
                 # Mixed precision training
                 with torch.cuda.amp.autocast():
@@ -383,31 +383,50 @@ class GRUTrainer:
                         raise ValueError("Model must be built before training")
                     output = self.model(data)
                     loss = self.criterion(output, target)
-                
+
                 # Check for NaN/Inf in loss
                 if torch.isnan(loss) or torch.isinf(loss):
                     logger.warning(f"NaN/Inf loss detected at batch {batch_idx}, skipping batch")
                     self._consecutive_bad_batches += 1
                     # Auto-fallback: if too many bad batches, reduce LR and disable AMP
                     if self._consecutive_bad_batches >= 3:
-                        if self.optimizer is not None:
-                            for g in self.optimizer.param_groups:
-                                g['lr'] = max(g['lr'] * 0.5, 1e-6)
-                        if self.scaler is not None:
-                            # drop AMP for stability
-                            self.mixed_precision = False
-                            self.scaler = None
-                            logger.warning("Disabling mixed precision and reducing LR due to unstable loss")
+                        for g in self.optimizer.param_groups:
+                            g['lr'] = max(g['lr'] * 0.5, 1e-6)
+                        # drop AMP for stability
+                        self.mixed_precision = False
+                        self.scaler = None
+                        logger.warning("Disabling mixed precision and reducing LR due to unstable loss")
                     self.optimizer.zero_grad()
                     continue
-                
+
                 self.scaler.scale(loss).backward()
-                if self.scaler is None or self.optimizer is None:
-                    raise ValueError("Scaler and optimizer must be initialized")
                 # Gradient clipping (requires unscale first)
                 if self.max_grad_norm and self.max_grad_norm > 0:
-                    self.scaler.unscale_(self.optimizer)
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
+                    # Guard unscale_ to avoid duplicate-unscale crash
+                    try:
+                        self.scaler.unscale_(self.optimizer)
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
+                    except RuntimeError as e:
+                        if "unscale_() has already been called" in str(e):
+                            logger.warning(
+                                f"GradScaler.unscale_ already called before clipping at batch {batch_idx}; skipping step and advancing scaler")
+                            # Treat as a bad batch to keep AMP state consistent
+                            self.optimizer.zero_grad(set_to_none=True)
+                            self._consecutive_bad_batches += 1
+                            try:
+                                self.scaler.update()
+                            except Exception:
+                                pass
+                            # Optional LR/backoff on persistent issues
+                            if self._consecutive_bad_batches >= 3:
+                                for g in self.optimizer.param_groups:
+                                    g['lr'] = max(g['lr'] * 0.5, 1e-6)
+                                self.mixed_precision = False
+                                self.scaler = None
+                                logger.warning("Disabling mixed precision due to repeated unscale issues")
+                            continue
+                        else:
+                            raise
                 # Check gradient finiteness
                 _bad_grad = False
                 for p in self.model.parameters():
@@ -419,6 +438,11 @@ class GRUTrainer:
                     logger.warning(f"Non-finite gradients at batch {batch_idx}, skipping optimizer step")
                     self.optimizer.zero_grad(set_to_none=True)
                     self._consecutive_bad_batches += 1
+                    # Important: advance scaler state even when skipping step after unscale_
+                    try:
+                        self.scaler.update()
+                    except Exception:
+                        pass
                     if self._consecutive_bad_batches >= 3:
                         for g in self.optimizer.param_groups:
                             g['lr'] = max(g['lr'] * 0.5, 1e-6)
@@ -434,7 +458,7 @@ class GRUTrainer:
                     raise ValueError("Model must be built before training")
                 output = self.model(data)
                 loss = self.criterion(output, target)
-                
+
                 # Check for NaN/Inf in loss
                 if torch.isnan(loss) or torch.isinf(loss):
                     logger.warning(f"NaN/Inf loss detected at batch {batch_idx}, skipping batch")
@@ -445,14 +469,12 @@ class GRUTrainer:
                             g['lr'] = max(g['lr'] * 0.5, 1e-6)
                     self.optimizer.zero_grad()
                     continue
-                
+
                 loss.backward()
-                if self.optimizer is None:
-                    raise ValueError("Optimizer must be initialized before training")
                 if self.max_grad_norm and self.max_grad_norm > 0:
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
                 self.optimizer.step()
-            
+
             loss_value = loss.item()
             # Additional safety check for loss value
             if not torch.isfinite(torch.tensor(loss_value)):
@@ -462,19 +484,19 @@ class GRUTrainer:
             else:
                 # Reset counter on good batch
                 self._consecutive_bad_batches = 0
-                
+
             total_loss += loss_value
             num_batches += 1
-            
+
             # Log progress every 100 batches
             if batch_idx % 100 == 0:
                 logger.debug(f"Batch {batch_idx}/{len(train_loader)}, Loss: {loss.item():.6f}")
-        
+
         # Return NaN if no valid batches processed
         if num_batches == 0:
             logger.warning("No valid batches in training, returning NaN")
             return float('nan')
-        
+
         return total_loss / num_batches
     
     def validate_epoch(self, val_loader: DataLoader) -> float:
