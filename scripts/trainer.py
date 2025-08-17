@@ -24,6 +24,7 @@ project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
 
 from src.utils.logger import setup_logging, TradingBotLogger
+from src.utils.mlflow_init import initialize_mlflow_from_config
 from src.data_pipeline.dataset_builder import DatasetBuilder
 from src.utils.cross_validation import PurgedTimeSeriesSplit
 from src.utils.metrics import TradingMetrics, optimize_threshold
@@ -214,6 +215,13 @@ def main() -> None:
     if not config:
         print("Failed to load configuration. Exiting.")
         return
+
+    # Initialize MLflow tracking with dynamic paths (fixes hardcoded path issues)
+    try:
+        if not initialize_mlflow_from_config(args.config):
+            print("Warning: MLflow initialization failed, but continuing...")
+    except Exception as e:
+        print(f"Warning: MLflow initialization error: {e}")
 
     logger = setup_logging(config)
     if args.verbose:

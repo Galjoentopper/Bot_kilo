@@ -32,6 +32,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 # Import from installed package
 from src.utils.logger import setup_logging, TradingBotLogger
+from src.utils.mlflow_init import initialize_mlflow_from_config
 from src.data_pipeline.features import FeatureEngine
 from src.data_pipeline.preprocess import DataPreprocessor
 from src.models.gru_trainer import GRUTrainer
@@ -1391,6 +1392,13 @@ async def main():
     if not config:
         print("Failed to load configuration. Exiting.")
         return
+
+    # Initialize MLflow tracking with dynamic paths (fixes hardcoded path issues)
+    try:
+        if not initialize_mlflow_from_config(args.config):
+            print("Warning: MLflow initialization failed, but continuing...")
+    except Exception as e:
+        print(f"Warning: MLflow initialization error: {e}")
 
     # Setup logging (ensures log file and handlers are created)
     setup_logging(config)
