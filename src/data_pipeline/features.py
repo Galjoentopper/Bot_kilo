@@ -258,9 +258,13 @@ class FeatureEngine:
         # On-Balance Volume (OBV)
         df['obv'] = self._calculate_obv(df)
         
-        # Volume Rate of Change - avoid division by zero
-        df['volume_roc_5'] = df['volume'].pct_change(5).fillna(0)
-        df['volume_roc_10'] = df['volume'].pct_change(10).fillna(0)
+        # Volume Rate of Change - avoid division by zero and clip to reasonable bounds
+        volume_roc_5 = df['volume'].pct_change(5).fillna(0)
+        volume_roc_10 = df['volume'].pct_change(10).fillna(0)
+        
+        # Replace infinite values and clip to reasonable percentage bounds
+        df['volume_roc_5'] = np.clip(volume_roc_5.replace([np.inf, -np.inf], [10, -0.9]), -0.99, 50)
+        df['volume_roc_10'] = np.clip(volume_roc_10.replace([np.inf, -np.inf], [10, -0.9]), -0.99, 50)
         
         return df
     
@@ -285,9 +289,13 @@ class FeatureEngine:
             )
             df[f'parkinson_vol_{period}'] = parkinson_vol.fillna(0)
         
-        # Volatility ratios - handle division by zero
-        df['vol_ratio_10_20'] = df['volatility_10'] / (df['volatility_20'] + 1e-10)
-        df['vol_ratio_20_50'] = df['volatility_20'] / (df['volatility_50'] + 1e-10)
+        # Volatility ratios - handle division by very small values more conservatively
+        # Use larger epsilon and clip ratios to reasonable financial bounds
+        vol_20_denom = np.maximum(df['volatility_20'], 1e-6)
+        vol_50_denom = np.maximum(df['volatility_50'], 1e-6)
+        
+        df['vol_ratio_10_20'] = np.clip(df['volatility_10'] / vol_20_denom, 0.01, 100)
+        df['vol_ratio_20_50'] = np.clip(df['volatility_20'] / vol_50_denom, 0.01, 100)
         
         return df
     
