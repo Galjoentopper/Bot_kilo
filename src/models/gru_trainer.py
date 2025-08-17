@@ -23,13 +23,21 @@ import random
 
 logger = logging.getLogger(__name__)
 
+# Global MLflow setup to avoid scoping issues
 try:
     import mlflow  # type: ignore[import-untyped]
     import mlflow.pytorch  # type: ignore
     MLFLOW_AVAILABLE = True
 except ImportError:
-    # Create dummy mlflow module for type hints
+    # Create comprehensive dummy mlflow module
+    class _DummyPytorchModule:
+        @staticmethod
+        def log_model(pytorch_model: Any, artifact_path: str, **kwargs: Any) -> None:
+            pass
+
     class _DummyMLflow:
+        pytorch = _DummyPytorchModule()
+        
         @staticmethod
         def start_run(*args: Any, **kwargs: Any) -> Any:
             from contextlib import nullcontext
@@ -37,6 +45,10 @@ except ImportError:
         
         @staticmethod
         def log_params(params: Dict[str, Any]) -> None:
+            pass
+        
+        @staticmethod
+        def log_param(key: str, value: Any) -> None:
             pass
             
         @staticmethod
@@ -47,14 +59,16 @@ except ImportError:
         def log_metric(key: str, value: float, step: Optional[int] = None) -> None:
             pass
         
-        class pytorch:
-            @staticmethod
-            def log_model(model: Any, artifact_path: str) -> None:
-                pass
+        @staticmethod
+        def log_artifact(local_path: str, artifact_path: Optional[str] = None) -> None:
+            pass
     
     mlflow = _DummyMLflow()  # type: ignore
     MLFLOW_AVAILABLE = False
     logger.warning("MLflow not available. Experiment tracking will be disabled.")
+
+# Global reference to avoid scoping issues
+_mlflow_module = mlflow
 
 class GRUModel(nn.Module):
     """
@@ -642,33 +656,33 @@ class GRUTrainer:
         # Prepare data loaders
         train_loader, val_loader = self.prepare_data(X_train, y_train, X_val, y_val)
         
-        # Start MLflow run (if available)
-        if MLFLOW_AVAILABLE and mlflow is not None:
-            mlflow_context = mlflow.start_run(run_name=f"gru_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+        # Start MLflow run (if available) using global reference
+        if MLFLOW_AVAILABLE and _mlflow_module is not None:
+            mlflow_context = _mlflow_module.start_run(run_name=f"gru_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
         else:
             from contextlib import nullcontext
             mlflow_context = nullcontext()
         
         with mlflow_context:
             # Log parameters (if MLflow available) - Updated to use modern MLflow API
-            if MLFLOW_AVAILABLE and mlflow is not None:
+            if MLFLOW_AVAILABLE and _mlflow_module is not None:
                 try:
                     # Use individual log_param calls for better compatibility
-                    mlflow.log_param("model_type", "GRU")
-                    mlflow.log_param("sequence_length", self.sequence_length)
-                    mlflow.log_param("hidden_size", self.hidden_size)
-                    mlflow.log_param("num_layers", self.num_layers)
-                    mlflow.log_param("dropout", self.dropout)
-                    mlflow.log_param("learning_rate", self.learning_rate)
-                    mlflow.log_param("optimizer", self.optimizer_name)
-                    mlflow.log_param("batch_size", self.batch_size)
-                    mlflow.log_param("epochs", self.epochs)
-                    mlflow.log_param("max_grad_norm", self.max_grad_norm)
-                    mlflow.log_param("device", str(self.device))
-                    mlflow.log_param("mixed_precision", self.mixed_precision)
-                    mlflow.log_param("loss_function", type(self.criterion).__name__)
-                    mlflow.log_param("feature_count", self.input_size)
-                    mlflow.log_param("early_stopping_patience", self.early_stopping_patience)
+                    _mlflow_module.log_param("model_type", "GRU")
+                    _mlflow_module.log_param("sequence_length", self.sequence_length)
+                    _mlflow_module.log_param("hidden_size", self.hidden_size)
+                    _mlflow_module.log_param("num_layers", self.num_layers)
+                    _mlflow_module.log_param("dropout", self.dropout)
+                    _mlflow_module.log_param("learning_rate", self.learning_rate)
+                    _mlflow_module.log_param("optimizer", self.optimizer_name)
+                    _mlflow_module.log_param("batch_size", self.batch_size)
+                    _mlflow_module.log_param("epochs", self.epochs)
+                    _mlflow_module.log_param("max_grad_norm", self.max_grad_norm)
+                    _mlflow_module.log_param("device", str(self.device))
+                    _mlflow_module.log_param("mixed_precision", self.mixed_precision)
+                    _mlflow_module.log_param("loss_function", type(self.criterion).__name__)
+                    _mlflow_module.log_param("feature_count", self.input_size)
+                    _mlflow_module.log_param("early_stopping_patience", self.early_stopping_patience)
                 except Exception as e:
                     logger.warning(f"Failed to log parameters to MLflow: {e}")
             
@@ -697,18 +711,18 @@ class GRUTrainer:
                 self.val_losses.append(val_loss)
                 
                 # Log metrics (if MLflow available) - Updated for better compatibility
-                if MLFLOW_AVAILABLE and mlflow is not None:
+                if MLFLOW_AVAILABLE and _mlflow_module is not None:
                     try:
                         # Use individual log_metric calls for better error handling
                         if not np.isnan(train_loss):
-                            mlflow.log_metric("train_loss", float(train_loss), step=epoch)
+                            _mlflow_module.log_metric("train_loss", float(train_loss), step=epoch)
                         if not np.isnan(val_loss):
-                            mlflow.log_metric("val_loss", float(val_loss), step=epoch)
+                            _mlflow_module.log_metric("val_loss", float(val_loss), step=epoch)
                         if self.optimizer:
                             current_lr = self.optimizer.param_groups[0]['lr']
-                            mlflow.log_metric("learning_rate", float(current_lr), step=epoch)
+                            _mlflow_module.log_metric("learning_rate", float(current_lr), step=epoch)
                         # Log additional gradient stability metrics
-                        mlflow.log_metric("consecutive_bad_batches", self._consecutive_bad_batches, step=epoch)
+                        _mlflow_module.log_metric("consecutive_bad_batches", self._consecutive_bad_batches, step=epoch)
                     except Exception as e:
                         logger.warning(f"Failed to log metrics to MLflow at epoch {epoch}: {e}")
                 
@@ -737,38 +751,26 @@ class GRUTrainer:
                     self.model.load_state_dict(self.best_model_state)
             
             # Log final metrics (if MLflow available) - Updated for modern API
-            if MLFLOW_AVAILABLE and mlflow is not None:
+            if MLFLOW_AVAILABLE and _mlflow_module is not None:
                 try:
-                    mlflow.log_metric("best_val_loss", float(self.best_val_loss))
-                    mlflow.log_metric("total_epochs", int(epoch + 1))
-                    mlflow.log_metric("final_learning_rate",
+                    _mlflow_module.log_metric("best_val_loss", float(self.best_val_loss))
+                    _mlflow_module.log_metric("total_epochs", int(epoch + 1))
+                    _mlflow_module.log_metric("final_learning_rate",
                                     float(self.optimizer.param_groups[0]['lr']) if self.optimizer else 0.0)
                     
                     # Log model artifacts with improved error handling
                     if self.model is not None:
                         try:
-                            # Create a sample input for model signature
-                            sample_input = torch.randn(1, self.sequence_length, self.input_size).to(self.device)
-                            
-                            with torch.no_grad():
-                                sample_output = self.model(sample_input)
-                            
                             # Use modern MLflow PyTorch logging with better error handling
-                            import mlflow.pytorch
-                            mlflow.pytorch.log_model(
-                                pytorch_model=self.model,
-                                artifact_path="gru_model",
-                                registered_model_name=None,  # Explicitly set to avoid deprecation warnings
-                                signature=None,  # Let MLflow infer signature
-                                input_example=None,  # Simplified for compatibility
-                                pip_requirements=None,
-                                extra_files=None,
-                                conda_env=None,
-                                code_paths=None,
-                                mlflow_model=None,
-                                metadata={"model_type": "GRU", "framework": "PyTorch"}
-                            )
-                            logger.info("Model successfully logged to MLflow")
+                            if MLFLOW_AVAILABLE:
+                                import mlflow.pytorch as mlflow_pytorch
+                                mlflow_pytorch.log_model(
+                                    pytorch_model=self.model,
+                                    artifact_path="gru_model"
+                                )
+                                logger.info("Model successfully logged to MLflow")
+                            else:
+                                raise AttributeError("MLflow pytorch module not available")
                         except Exception as e:
                             logger.warning(f"MLflow model logging failed: {e}")
                             # Fall back to just logging the state dict
@@ -777,7 +779,9 @@ class GRUTrainer:
                                 import os
                                 with tempfile.NamedTemporaryFile(suffix='.pth', delete=False) as tmp:
                                     torch.save(self.model.state_dict(), tmp.name)
-                                    mlflow.log_artifact(tmp.name, "model")
+                                    if MLFLOW_AVAILABLE:
+                                        import mlflow
+                                        mlflow.log_artifact(tmp.name, "model")
                                     os.unlink(tmp.name)
                                 logger.info("Model state dict logged as artifact")
                             except Exception as fallback_e:
