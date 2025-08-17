@@ -915,24 +915,24 @@ class FeatureEngine:
             col_std = col_data.std()
             col_median = col_data.median()
             
-            # Much more aggressive feature validation for financial ML stability
-            if col_abs_max > 50 or (col_std > 0 and col_abs_max > abs(col_median) + 20 * col_std):
+            # Financial-data-aware feature validation for ML stability
+            if col_abs_max > 500000 or (col_std > 0 and col_abs_max > abs(col_median) + 50 * col_std):
                 extreme_features.append((col, col_abs_max))
                 logger.warning(f"Extreme values in feature '{col}': max_abs={col_abs_max:.2f}, std={col_std:.6f}")
                 
-                # Aggressive clipping for financial ML stability
-                if col_abs_max > 1000:
-                    # Extremely large values - clip to very tight range
-                    features_df[col] = np.clip(features_df[col], -5, 5)
-                    logger.warning(f"Applied extreme clipping [-5, 5] to feature '{col}' (was {col_abs_max:.2f})")
-                elif col_abs_max > 100:
-                    # Large values - clip to tight range
-                    features_df[col] = np.clip(features_df[col], -10, 10)
-                    logger.warning(f"Applied tight clipping [-10, 10] to feature '{col}' (was {col_abs_max:.2f})")
-                elif col_abs_max > 50:
-                    # Moderate values - clip to moderate range
-                    features_df[col] = np.clip(features_df[col], -25, 25)
-                    logger.warning(f"Applied moderate clipping [-25, 25] to feature '{col}' (was {col_abs_max:.2f})")
+                # Financial-appropriate clipping for ML stability
+                if col_abs_max > 1000000:
+                    # Extremely large values - clip to large but reasonable range
+                    features_df[col] = np.clip(features_df[col], -500000, 500000)
+                    logger.warning(f"Applied extreme clipping [-500k, 500k] to feature '{col}' (was {col_abs_max:.2f})")
+                elif col_abs_max > 200000:
+                    # Large values - clip to moderate range
+                    features_df[col] = np.clip(features_df[col], -150000, 150000)
+                    logger.warning(f"Applied large clipping [-150k, 150k] to feature '{col}' (was {col_abs_max:.2f})")
+                elif col_abs_max > 100000:
+                    # Moderate values - clip conservatively (BTC prices are often >100k)
+                    features_df[col] = np.clip(features_df[col], -120000, 120000)
+                    logger.warning(f"Applied moderate clipping [-120k, 120k] to feature '{col}' (was {col_abs_max:.2f})")
         
         # Handle NaN values with improved strategy
         for col in numeric_cols:
@@ -981,6 +981,7 @@ class FeatureEngine:
     def _apply_intermediate_validation(self, features_df: pd.DataFrame, stage: str) -> pd.DataFrame:
         """
         Apply intermediate validation during feature generation to prevent extreme value propagation.
+        Uses financial-data-appropriate bounds instead of overly aggressive clipping.
         """
         numeric_cols = features_df.select_dtypes(include=[np.number]).columns
         clipped_features = []
@@ -995,15 +996,21 @@ class FeatureEngine:
                 
             col_abs_max = np.abs(col_data).max()
             
-            # Immediate aggressive clipping at intermediate stages
-            if col_abs_max > 1000:
-                features_df[col] = np.clip(features_df[col], -10, 10)
+            # Financial-data-appropriate clipping bounds
+            if col_abs_max > 1000000:  # 1M+ (extreme outliers)
+                features_df[col] = np.clip(features_df[col], -500000, 500000)
                 clipped_features.append((col, col_abs_max))
-                logger.warning(f"Intermediate clipping [-10, 10] on '{col}' {stage} (was {col_abs_max:.2f})")
-            elif col_abs_max > 100:
-                features_df[col] = np.clip(features_df[col], -50, 50)
+                logger.warning(f"Intermediate clipping [-500k, 500k] on '{col}' {stage} (was {col_abs_max:.2f})")
+            elif col_abs_max > 200000:  # 200k+ (very high values)
+                features_df[col] = np.clip(features_df[col], -150000, 150000)
                 clipped_features.append((col, col_abs_max))
-                logger.debug(f"Intermediate clipping [-50, 50] on '{col}' {stage} (was {col_abs_max:.2f})")
+                logger.warning(f"Intermediate clipping [-150k, 150k] on '{col}' {stage} (was {col_abs_max:.2f})")
+            elif col_abs_max > 50000:  # 50k+ (moderately high values - still reasonable for BTC)
+                # Only clip if it's truly excessive (>200k) - 50k-200k is normal for BTC
+                if col_abs_max > 200000:
+                    features_df[col] = np.clip(features_df[col], -150000, 150000)
+                    clipped_features.append((col, col_abs_max))
+                    logger.debug(f"Intermediate clipping [-150k, 150k] on '{col}' {stage} (was {col_abs_max:.2f})")
         
         # Replace any remaining NaN/Inf values immediately
         features_df = features_df.replace([np.inf, -np.inf], np.nan).fillna(0)
