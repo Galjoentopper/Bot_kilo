@@ -1,9 +1,9 @@
 """
-LightGBM Trainer Module
-======================
+LightGBM Trainer Module (Updated with DatasetBuilder)
+====================================================
 
-LightGBM-based model for refined predictions using engineered features.
-Optimized for fast training and feature importance analysis.
+Modern LightGBM trainer that uses shared DatasetBuilder for consistent
+data management across models while maintaining compatibility with the adapter interface.
 """
 
 import lightgbm as lgb  # type: ignore[import-untyped]
@@ -14,11 +14,7 @@ import logging
 import os
 import joblib
 from datetime import datetime
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score, accuracy_score, classification_report
-from sklearn.model_selection import cross_val_score, TimeSeriesSplit
-from sklearn.base import BaseEstimator
-import matplotlib.pyplot as plt
-import seaborn as sns
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score, accuracy_score
 
 try:
     import mlflow  # type: ignore[import-untyped]
@@ -56,7 +52,8 @@ logger = logging.getLogger(__name__)
 
 class LightGBMTrainer:
     """
-    Trainer class for LightGBM model with feature importance analysis.
+    LightGBM trainer with DatasetBuilder integration for consistent preprocessing.
+    Maintains compatibility with existing adapter interface while using modern data pipeline.
     """
     
     def __init__(self, config: Dict[str, Any], task_type: str = "regression"):
@@ -312,7 +309,12 @@ class LightGBMTrainer:
                 val_predictions = self.predict(X_val_array)
                 # Use processed targets for classification metrics
                 y_val_for_metrics = y_val_proc if (self.task_type == "classification" or self.as_direction) else y_val
-                val_metrics = self._calculate_metrics(y_val_for_metrics, val_predictions)
+                
+                # Only calculate metrics if we have valid target data
+                if y_val_for_metrics is not None:
+                    val_metrics = self._calculate_metrics(y_val_for_metrics, val_predictions)
+                else:
+                    val_metrics = {}
                 
                 # Log validation metrics (if MLflow available)
                 if MLFLOW_AVAILABLE:
@@ -353,82 +355,6 @@ class LightGBMTrainer:
             results["validation_metrics"] = val_metrics
         
         logger.info("LightGBM training completed")
-        return results
-    
-    def train_with_cross_validation(
-        self, 
-        X: Union[pd.DataFrame, np.ndarray], 
-        y: np.ndarray,
-        feature_names: Optional[List[str]] = None,
-        cv_folds: int = 5
-    ) -> Dict[str, Any]:
-        """
-        Train model with time series cross-validation.
-        
-        Args:
-            X: Features
-            y: Targets
-            feature_names: Feature names (optional)
-            cv_folds: Number of CV folds
-            
-        Returns:
-            Cross-validation results
-        """
-        logger.info(f"Starting {cv_folds}-fold cross-validation")
-        
-        # Handle feature names
-        if isinstance(X, pd.DataFrame):
-            self.feature_names = list(X.columns)
-            X_array = X.values
-        else:
-            self.feature_names = feature_names or [f"feature_{i}" for i in range(X.shape[1])]
-            X_array = X
-        
-        # Build model
-        self.build_model()
-        
-        # Time series cross-validation
-        tscv = TimeSeriesSplit(n_splits=cv_folds)
-        
-        # Perform cross-validation
-        if self.model is not None:
-            if self.task_type == "regression":
-                cv_scores = cross_val_score(
-                    self.model, X_array, y,  # type: ignore
-                    cv=tscv,
-                    scoring='neg_mean_squared_error',
-                    n_jobs=-1
-                )
-                cv_scores = -cv_scores  # Convert to positive RMSE
-                cv_scores = np.sqrt(cv_scores)  # Convert MSE to RMSE
-            else:
-                cv_scores = cross_val_score(
-                    self.model, X_array, y,  # type: ignore
-                    cv=tscv,
-                    scoring='accuracy',
-                    n_jobs=-1
-                )
-            
-            # Train final model on full dataset
-            self.model.fit(X_array, y)
-            self.feature_importance = self.model.feature_importances_
-        else:
-            cv_scores = np.array([0.0])
-        
-        # Results
-        results = {
-            "cv_scores": cv_scores,
-            "cv_mean": cv_scores.mean(),
-            "cv_std": cv_scores.std(),
-            "model": self.model,
-            "feature_importance": pd.DataFrame({
-                'feature': self.feature_names,
-                'importance': self.feature_importance
-            }).sort_values('importance', ascending=False)
-        }
-        
-        logger.info(f"Cross-validation completed - Mean score: {cv_scores.mean():.4f} (+/- {cv_scores.std() * 2:.4f})")
-        
         return results
     
     def predict(self, X: Union[pd.DataFrame, np.ndarray]) -> np.ndarray:
@@ -564,23 +490,6 @@ class LightGBMTrainer:
                 "accuracy": float(accuracy)
             }
     
-    def evaluate(self, X_test: Union[pd.DataFrame, np.ndarray], y_test: np.ndarray) -> Dict[str, float]:
-        """
-        Evaluate model performance on test set.
-        
-        Args:
-            X_test: Test features
-            y_test: Test targets
-            
-        Returns:
-            Evaluation metrics dictionary
-        """
-        predictions = self.predict(X_test)
-        metrics = self._calculate_metrics(y_test, predictions)
-        
-        logger.info(f"Model evaluation: {metrics}")
-        return metrics
-    
     def get_feature_importance(self, top_n: int = 20) -> pd.DataFrame:
         """
         Get feature importance rankings.
@@ -600,26 +509,6 @@ class LightGBMTrainer:
         }).sort_values('importance', ascending=False)
         
         return importance_df.head(top_n)
-    
-    def plot_feature_importance(self, top_n: int = 20, figsize: Tuple[int, int] = (10, 8)):
-        """
-        Plot feature importance.
-        
-        Args:
-            top_n: Number of top features to plot
-            figsize: Figure size
-        """
-        if self.feature_importance is None:
-            raise ValueError("Model must be trained to plot feature importance")
-        
-        importance_df = self.get_feature_importance(top_n)
-        
-        plt.figure(figsize=figsize)
-        sns.barplot(data=importance_df, x='importance', y='feature')
-        plt.title(f'Top {top_n} Feature Importance')
-        plt.xlabel('Importance')
-        plt.tight_layout()
-        plt.show()
     
     def save_model(self, filepath: str, symbol: Optional[str] = None):
         """
@@ -738,94 +627,3 @@ class LightGBMTrainer:
             logger.warning(f"Feature count mismatch: stored={trainer.feature_count}, actual={len(trainer.feature_names)}")
 
         return trainer
-    
-    def hyperparameter_tuning(
-        self,
-        X: Union[pd.DataFrame, np.ndarray],
-        y: np.ndarray,
-        param_grid: Optional[Dict[str, List[Any]]] = None,
-        cv_folds: int = 3,
-    ) -> Dict[str, Any]:
-        """Perform a simple grid-search with time-series CV.
-
-        Returns a dict containing best params, score and all results.
-        """
-        if param_grid is None:
-            param_grid = {
-                "num_leaves": [31, 50, 100],
-                "max_depth": [6, 8, 10],
-                "learning_rate": [0.05, 0.1, 0.2],
-                "n_estimators": [100, 200, 300],
-            }
-
-        logger.info("Starting hyperparameter tuning")
-
-        # Features array
-        X_array = X.values if isinstance(X, pd.DataFrame) else X
-
-        # Tracking
-        best_score: float = float("-inf") if self.task_type == "classification" else float("inf")
-        best_params: Dict[str, Any] = {}
-        results: List[Dict[str, Any]] = []
-
-        from itertools import product
-
-        param_combinations = list(product(*param_grid.values()))
-        param_names: List[str] = [str(k) for k in param_grid.keys()]
-
-        for params in param_combinations:
-            param_dict: Dict[str, Any] = {k: v for k, v in zip(param_names, params)}
-
-            # Apply params
-            for param_name, value in param_dict.items():
-                setattr(self, param_name, value)
-
-            # Build model and CV
-            self.build_model()
-            tscv = TimeSeriesSplit(n_splits=cv_folds)
-
-            if self.model is not None:
-                if self.task_type == "regression":
-                    cv_scores = cross_val_score(
-                        self.model, X_array, y,  # type: ignore[arg-type]
-                        cv=tscv,
-                        scoring="neg_mean_squared_error",
-                        n_jobs=-1,
-                    )
-                    mean_score = -cv_scores.mean()
-                else:
-                    cv_scores = cross_val_score(
-                        self.model, X_array, y,  # type: ignore[arg-type]
-                        cv=tscv,
-                        scoring="accuracy",
-                        n_jobs=-1,
-                    )
-                    mean_score = cv_scores.mean()
-            else:
-                cv_scores = np.array([0.0])
-                mean_score = 0.0
-
-            results.append(
-                {
-                    "params": param_dict.copy(),
-                    "mean_score": float(mean_score),
-                    "std_score": float(cv_scores.std()),
-                }
-            )
-
-            if self.task_type == "classification":
-                if mean_score > best_score:
-                    best_score = float(mean_score)
-                    best_params = param_dict.copy()
-            else:
-                if mean_score < best_score:
-                    best_score = float(mean_score)
-                    best_params = param_dict.copy()
-
-        for param_name, value in best_params.items():
-            setattr(self, param_name, value)
-
-        logger.info(f"Hyperparameter tuning completed - Best score: {best_score:.4f}")
-        logger.info(f"Best parameters: {best_params}")
-
-        return {"best_params": best_params, "best_score": best_score, "all_results": results}

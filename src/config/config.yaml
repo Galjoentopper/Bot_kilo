@@ -16,7 +16,7 @@ models:
     num_layers: 2
     dropout: 0.2
     optimizer: "RMSprop"
-    learning_rate: 0.001
+    learning_rate: 0.00001  # Much more conservative learning rate for stability
     batch_size: 32
     epochs: 500
     early_stopping_patience: 10
@@ -177,7 +177,8 @@ mlflow:
 # GPU/Training Configuration (Paperspace Gradient optimized)
 training:
   device: "cuda"  # Will auto-detect GPU availability
-  mixed_precision: true  # For faster training on modern GPUs
+  mixed_precision: false  # Disabled for gradient stability with financial data
   num_workers: 4  # Data loading workers
   pin_memory: true  # For GPU training optimization
   gradient_checkpointing: true  # Memory optimization for large models
+  max_grad_norm: 0.5  # Gradient clipping for stability
