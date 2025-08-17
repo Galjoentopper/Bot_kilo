@@ -55,7 +55,7 @@ class FeatureEngine:
     
     def generate_all_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Generate all features for the input DataFrame.
+        Generate all features for the input DataFrame with robust validation.
         
         Args:
             df: Input DataFrame with OHLCV data
@@ -72,66 +72,49 @@ class FeatureEngine:
         # Create a copy to avoid modifying original data
         features_df = df.copy()
         
-        # Price-based features
+        # CRITICAL: Validate and clean source data FIRST with absolute bounds
+        features_df = self._validate_and_clean_source_data(features_df)
+        
+        # Apply ultra-aggressive initial clipping to prevent extreme calculations
+        for col in ['open', 'high', 'low', 'close']:
+            if col in features_df.columns:
+                features_df[col] = np.clip(features_df[col], 0.01, 100000)  # $0.01 to $100k hard bounds
+        if 'volume' in features_df.columns:
+            features_df['volume'] = np.clip(features_df['volume'], 0, 1e9)  # Max 1B volume
+        
+        # Price-based features with intermediate validation
         features_df = self._add_price_features(features_df)
+        features_df = self._apply_intermediate_validation(features_df, "after price features")
         
-        # Technical indicators
+        # Technical indicators with intermediate validation
         features_df = self._add_technical_indicators(features_df)
+        features_df = self._apply_intermediate_validation(features_df, "after technical indicators")
         
-        # Volume features
+        # Volume features with intermediate validation
         features_df = self._add_volume_features(features_df)
+        features_df = self._apply_intermediate_validation(features_df, "after volume features")
         
-        # Volatility features
+        # Volatility features with intermediate validation
         features_df = self._add_volatility_features(features_df)
+        features_df = self._apply_intermediate_validation(features_df, "after volatility features")
         
-        # Momentum features
+        # Momentum features with intermediate validation
         features_df = self._add_momentum_features(features_df)
+        features_df = self._apply_intermediate_validation(features_df, "after momentum features")
         
-        # Time-based features
+        # Time-based features (typically safe)
         features_df = self._add_time_features(features_df)
         
-        # Custom features
+        # Custom features with intermediate validation
         features_df = self._add_custom_features(features_df)
+        features_df = self._apply_intermediate_validation(features_df, "after custom features")
         
         # Advanced features for PPO compatibility (9 additional features)
         features_df = self._add_advanced_features(features_df)
+        features_df = self._apply_intermediate_validation(features_df, "after advanced features")
         
-        # Remove any infinite or NaN values with more robust handling
-        features_df = features_df.replace([np.inf, -np.inf], np.nan)
-        
-        # Count NaN values before cleaning
-        nan_count_before = features_df.isnull().sum().sum()
-        if nan_count_before > 0:
-            logger.warning(f"Found {nan_count_before} NaN values in generated features")
-        
-        # Improved NaN handling with minimum data validation
-        # Forward fill, then backward fill, then fill remaining with 0
-        # But first, let's identify columns that are mostly NaN and handle them separately
-        for col in features_df.columns:
-            # Check if column is mostly NaN (more than 50%)
-            nan_ratio = features_df[col].isnull().sum() / len(features_df)
-            if nan_ratio > 0.5:
-                # For mostly NaN columns, fill with 0
-                features_df[col] = features_df[col].fillna(0)
-                logger.debug(f"Column {col} had high NaN ratio ({nan_ratio:.2f}), filled with 0")
-        
-        # Standard fill for remaining NaN values
-        features_df = features_df.ffill().bfill().fillna(0)
-        
-        # Final validation - ensure no NaN or inf values remain
-        nan_count_after = features_df.isnull().sum().sum()
-        inf_count = np.isinf(features_df.select_dtypes(include=[np.number])).sum().sum()
-        
-        if nan_count_after > 0:
-            logger.error(f"Still have {nan_count_after} NaN values after cleaning")
-            features_df = features_df.fillna(0)  # Force fill any remaining NaN
-        
-        if inf_count > 0:
-            logger.error(f"Still have {inf_count} infinite values after cleaning")
-            features_df = features_df.replace([np.inf, -np.inf], [1e6, -1e6])  # Replace with large but finite values
-        
-        # Ensure all values are finite
-        features_df = features_df.replace([np.inf, -np.inf], np.nan).fillna(0)
+        # CRITICAL: Apply final robust feature validation and cleaning
+        features_df = self._apply_robust_feature_validation(features_df)
         
         # Log feature generation summary
         original_cols = len(df.columns)
@@ -770,3 +753,262 @@ class FeatureEngine:
         # Normalize to 0-100 scale (higher values = trending, lower = ranging)
         regime_normalized = regime * 100
         return regime_normalized.bfill().fillna(50)  # Fill with neutral value
+    
+    def _validate_and_clean_source_data(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Validate and clean source OHLCV data before feature engineering.
+        This prevents extreme values from propagating through the feature pipeline.
+        """
+        logger.info("Validating and cleaning source data...")
+        
+        # Check for required columns
+        required_cols = ['open', 'high', 'low', 'close', 'volume']
+        missing_cols = [col for col in required_cols if col not in df.columns]
+        if missing_cols:
+            logger.warning(f"Missing required columns: {missing_cols}")
+        
+        # Create a copy to avoid modifying original
+        clean_df = df.copy()
+        
+        # Check for infinite and NaN values FIRST
+        for col in ['open', 'high', 'low', 'close']:
+            if col in clean_df.columns:
+                # Replace infinite values with NaN
+                clean_df[col] = clean_df[col].replace([np.inf, -np.inf], np.nan)
+                
+                # Count problematic values
+                nan_count = clean_df[col].isnull().sum()
+                if nan_count > 0:
+                    logger.warning(f"Found {nan_count} NaN/Inf values in {col}, forward-filling")
+                    # Forward fill, then backward fill, then use median
+                    clean_df[col] = clean_df[col].ffill().bfill()
+                    remaining_nan = clean_df[col].isnull().sum()
+                    if remaining_nan > 0:
+                        col_median = clean_df[col].median()
+                        if pd.isna(col_median):
+                            col_median = 50000.0  # Fallback reasonable crypto price
+                        clean_df[col] = clean_df[col].fillna(col_median)
+                        logger.warning(f"Filled {remaining_nan} remaining NaN values in {col} with median {col_median:.2f}")
+
+        # Now check for extreme values AFTER handling NaN/Inf
+        for col in ['open', 'high', 'low', 'close']:
+            if col in clean_df.columns:
+                col_data = clean_df[col].dropna()
+                if len(col_data) == 0:
+                    continue
+                    
+                col_max = col_data.max()
+                col_min = col_data.min()
+                
+                # Use robust percentile-based bounds instead of median (which can be corrupted by outliers)
+                try:
+                    # Use 25th and 75th percentiles for robust statistics
+                    q25 = col_data.quantile(0.25)
+                    q75 = col_data.quantile(0.75)
+                    iqr = q75 - q25
+                    
+                    # If IQR is too small or corrupted, fall back to absolute bounds
+                    if iqr < 1 or pd.isna(iqr):
+                        # Absolute bounds for financial data - very conservative
+                        upper_bound = 200000  # $200k absolute max for crypto
+                        lower_bound = 0.01    # $0.01 absolute min
+                        logger.warning(f"Using absolute bounds for {col} due to corrupted statistics")
+                    else:
+                        # Robust outlier detection using IQR method
+                        robust_upper = q75 + 3 * iqr  # 3x IQR above Q3
+                        robust_lower = q25 - 3 * iqr  # 3x IQR below Q1
+                        
+                        # Cap at reasonable financial bounds
+                        upper_bound = min(robust_upper, 200000)  # Max $200k
+                        lower_bound = max(robust_lower, 0.01)    # Min $0.01
+                        
+                except Exception as e:
+                    logger.warning(f"Percentile calculation failed for {col}: {e}, using absolute bounds")
+                    upper_bound = 200000  # $200k absolute max
+                    lower_bound = 0.01    # $0.01 absolute min
+                
+                # Check if cleaning is needed using absolute thresholds
+                needs_cleaning = (col_max > upper_bound or col_min < lower_bound or
+                                col_max > 500000 or col_min < 0)  # Emergency absolute bounds
+                
+                if needs_cleaning:
+                    logger.error(f"CRITICAL: Extreme values in {col} - min: {col_min:.2f}, max: {col_max:.2f}")
+                    
+                    before_count = len(clean_df)
+                    extreme_mask = (clean_df[col] > upper_bound) | (clean_df[col] < lower_bound)
+                    extreme_count = extreme_mask.sum()
+                    
+                    if extreme_count > 0:
+                        logger.warning(f"Aggressively clipping {extreme_count}/{before_count} extreme values in {col} to [{lower_bound:.2f}, {upper_bound:.2f}]")
+                        clean_df[col] = np.clip(clean_df[col], lower_bound, upper_bound)
+        
+        # Check for volume anomalies
+        if 'volume' in clean_df.columns:
+            vol_median = clean_df['volume'].median()
+            vol_max = clean_df['volume'].max()
+            
+            # Flag volume spikes > 100x median
+            if vol_max > vol_median * 100:
+                logger.warning(f"Large volume spike detected - max: {vol_max:.2f}, median: {vol_median:.2f}")
+                # Cap volume at 50x median
+                clean_df['volume'] = np.clip(clean_df['volume'], 0, vol_median * 50)
+        
+        # Check for NaN/Inf values in source data
+        nan_count = clean_df.isnull().sum().sum()
+        if nan_count > 0:
+            logger.warning(f"Found {nan_count} NaN values in source data, forward-filling")
+            clean_df = clean_df.ffill().bfill()
+        
+        # Check for infinite values
+        inf_count = np.isinf(clean_df.select_dtypes(include=[np.number])).sum().sum()
+        if inf_count > 0:
+            logger.warning(f"Found {inf_count} infinite values in source data, replacing")
+            clean_df = clean_df.replace([np.inf, -np.inf], np.nan).ffill().bfill()
+        
+        # Validate OHLC relationships
+        if all(col in clean_df.columns for col in ['open', 'high', 'low', 'close']):
+            # Check if high >= max(open, close) and low <= min(open, close)
+            high_valid = clean_df['high'] >= np.maximum(clean_df['open'], clean_df['close'])
+            low_valid = clean_df['low'] <= np.minimum(clean_df['open'], clean_df['close'])
+            
+            invalid_high = (~high_valid).sum()
+            invalid_low = (~low_valid).sum()
+            
+            if invalid_high > 0 or invalid_low > 0:
+                logger.warning(f"Invalid OHLC relationships: {invalid_high} high violations, {invalid_low} low violations")
+                
+                # Fix invalid relationships
+                clean_df['high'] = np.maximum(clean_df['high'], np.maximum(clean_df['open'], clean_df['close']))
+                clean_df['low'] = np.minimum(clean_df['low'], np.minimum(clean_df['open'], clean_df['close']))
+        
+        logger.info("Source data validation and cleaning completed")
+        return clean_df
+    
+    def _apply_robust_feature_validation(self, features_df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Apply robust validation and cleaning to generated features.
+        This prevents extreme feature values from causing gradient explosions.
+        """
+        logger.info("Applying robust feature validation...")
+        
+        # Replace infinite values with NaN first
+        features_df = features_df.replace([np.inf, -np.inf], np.nan)
+        
+        # Count and log initial issues
+        nan_count_before = features_df.isnull().sum().sum()
+        if nan_count_before > 0:
+            logger.info(f"Found {nan_count_before} NaN/Inf values in generated features")
+        
+        # Identify and handle features with extreme values
+        numeric_cols = features_df.select_dtypes(include=[np.number]).columns
+        extreme_features = []
+        
+        for col in numeric_cols:
+            if col in ['open', 'high', 'low', 'close', 'volume']:
+                continue  # Skip original OHLCV columns
+                
+            col_data = features_df[col].dropna()
+            if len(col_data) == 0:
+                continue
+                
+            col_abs_max = np.abs(col_data).max()
+            col_std = col_data.std()
+            col_median = col_data.median()
+            
+            # Much more aggressive feature validation for financial ML stability
+            if col_abs_max > 50 or (col_std > 0 and col_abs_max > abs(col_median) + 20 * col_std):
+                extreme_features.append((col, col_abs_max))
+                logger.warning(f"Extreme values in feature '{col}': max_abs={col_abs_max:.2f}, std={col_std:.6f}")
+                
+                # Aggressive clipping for financial ML stability
+                if col_abs_max > 1000:
+                    # Extremely large values - clip to very tight range
+                    features_df[col] = np.clip(features_df[col], -5, 5)
+                    logger.warning(f"Applied extreme clipping [-5, 5] to feature '{col}' (was {col_abs_max:.2f})")
+                elif col_abs_max > 100:
+                    # Large values - clip to tight range
+                    features_df[col] = np.clip(features_df[col], -10, 10)
+                    logger.warning(f"Applied tight clipping [-10, 10] to feature '{col}' (was {col_abs_max:.2f})")
+                elif col_abs_max > 50:
+                    # Moderate values - clip to moderate range
+                    features_df[col] = np.clip(features_df[col], -25, 25)
+                    logger.warning(f"Applied moderate clipping [-25, 25] to feature '{col}' (was {col_abs_max:.2f})")
+        
+        # Handle NaN values with improved strategy
+        for col in numeric_cols:
+            if col in ['open', 'high', 'low', 'close', 'volume']:
+                continue  # Skip original OHLCV columns
+                
+            nan_ratio = features_df[col].isnull().sum() / len(features_df)
+            
+            if nan_ratio > 0.8:
+                # Feature is mostly NaN - fill with zeros
+                features_df[col] = features_df[col].fillna(0)
+                logger.debug(f"Feature '{col}' was {nan_ratio:.1%} NaN, filled with zeros")
+            elif nan_ratio > 0.5:
+                # Feature is significantly NaN - fill with median
+                median_val = features_df[col].median()
+                features_df[col] = features_df[col].fillna(median_val if pd.notna(median_val) else 0)
+                logger.debug(f"Feature '{col}' was {nan_ratio:.1%} NaN, filled with median")
+        
+        # Final NaN cleanup - forward fill, backward fill, then zero fill
+        features_df = features_df.ffill().bfill().fillna(0)
+        
+        # Final validation - ensure no NaN or infinite values remain
+        nan_count_after = features_df.isnull().sum().sum()
+        inf_count = np.isinf(features_df.select_dtypes(include=[np.number])).sum().sum()
+        
+        if nan_count_after > 0:
+            logger.error(f"Still have {nan_count_after} NaN values after cleaning, force-filling with 0")
+            features_df = features_df.fillna(0)
+        
+        if inf_count > 0:
+            logger.error(f"Still have {inf_count} infinite values after cleaning, replacing with large finite values")
+            features_df = features_df.replace([np.inf, -np.inf], [1e6, -1e6])
+        
+        # Final safety check - ensure ALL values are finite
+        features_df = features_df.replace([np.inf, -np.inf], np.nan).fillna(0)
+        
+        # Log validation summary
+        if extreme_features:
+            logger.warning(f"Cleaned {len(extreme_features)} features with extreme values")
+        
+        final_max = features_df.select_dtypes(include=[np.number]).abs().max().max()
+        logger.info(f"Feature validation completed - max absolute value: {final_max:.6f}")
+        
+        return features_df
+    
+    def _apply_intermediate_validation(self, features_df: pd.DataFrame, stage: str) -> pd.DataFrame:
+        """
+        Apply intermediate validation during feature generation to prevent extreme value propagation.
+        """
+        numeric_cols = features_df.select_dtypes(include=[np.number]).columns
+        clipped_features = []
+        
+        for col in numeric_cols:
+            if col in ['open', 'high', 'low', 'close', 'volume']:
+                continue  # Skip original OHLCV columns
+                
+            col_data = features_df[col].dropna()
+            if len(col_data) == 0:
+                continue
+                
+            col_abs_max = np.abs(col_data).max()
+            
+            # Immediate aggressive clipping at intermediate stages
+            if col_abs_max > 1000:
+                features_df[col] = np.clip(features_df[col], -10, 10)
+                clipped_features.append((col, col_abs_max))
+                logger.warning(f"Intermediate clipping [-10, 10] on '{col}' {stage} (was {col_abs_max:.2f})")
+            elif col_abs_max > 100:
+                features_df[col] = np.clip(features_df[col], -50, 50)
+                clipped_features.append((col, col_abs_max))
+                logger.debug(f"Intermediate clipping [-50, 50] on '{col}' {stage} (was {col_abs_max:.2f})")
+        
+        # Replace any remaining NaN/Inf values immediately
+        features_df = features_df.replace([np.inf, -np.inf], np.nan).fillna(0)
+        
+        if clipped_features:
+            logger.info(f"Applied intermediate validation {stage}: clipped {len(clipped_features)} features")
+        
+        return features_df
