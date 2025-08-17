@@ -232,7 +232,9 @@ def main() -> None:
 
     try:
         notifier = TelegramNotifier.from_config(config)
-    except Exception:
+        logger.info(f"Telegram notifier initialized: enabled={getattr(notifier, 'enabled', False)}")
+    except Exception as e:
+        logger.error(f"Failed to initialize Telegram notifier: {e}")
         notifier = None
 
     dataset_builder = DatasetBuilder(
@@ -333,11 +335,14 @@ def main() -> None:
         try:
             symbols_preview = ", ".join(symbols_to_train)
             models_preview = ", ".join(model_list)
+            logger.info("Sending Telegram start notification...")
             notifier.send_message_sync(
                 f"🚀 <b>Training started</b>\n<b>Symbols:</b> {symbols_preview}\n<b>Models:</b> {models_preview}\n<b>Interval:</b> {interval}\n<b>Start:</b> {start_date or 'full history'}"
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"Failed to send Telegram start notification: {e}")
+    else:
+        logger.warning(f"Telegram notifications disabled - notifier exists: {notifier is not None}, enabled: {getattr(notifier, 'enabled', False) if notifier else False}")
 
     for symbol in symbols_to_train:
         logger.info(f"==== Training {symbol} ====")

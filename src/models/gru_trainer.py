@@ -110,18 +110,27 @@ class GRUModel(nn.Module):
         self._init_weights()
     
     def _init_weights(self):
-        """Initialize model weights."""
+        """Initialize model weights with improved stability."""
         for name, param in self.named_parameters():
             if 'weight_ih' in name:
-                nn.init.xavier_uniform_(param.data)
+                # Use Xavier/Glorot initialization for input-hidden weights
+                nn.init.xavier_uniform_(param.data, gain=1.0)
             elif 'weight_hh' in name:
-                nn.init.orthogonal_(param.data)
+                # Use orthogonal initialization for hidden-hidden weights
+                nn.init.orthogonal_(param.data, gain=1.0)
             elif 'bias' in name:
-                param.data.fill_(0)
+                # Initialize biases to small positive values for GRU gates
+                param.data.fill_(0.01)
+            elif 'fc' in name and 'weight' in name:
+                # Initialize fully connected layer weights
+                nn.init.xavier_uniform_(param.data, gain=0.5)
+            elif 'fc' in name and 'bias' in name:
+                # Initialize fully connected layer biases
+                param.data.fill_(0.0)
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
-        Forward pass.
+        Forward pass with stability checks.
         
         Args:
             x: Input tensor of shape (batch_size, sequence_length, input_size)
@@ -129,6 +138,9 @@ class GRUModel(nn.Module):
         Returns:
             Output tensor of shape (batch_size, output_size)
         """
+        # Input sanitization
+        x = torch.nan_to_num(x, nan=0.0, posinf=1.0, neginf=-1.0)
+        
         # GRU forward pass
         gru_out, _ = self.gru(x)
         
@@ -141,6 +153,9 @@ class GRUModel(nn.Module):
         # Fully connected layers
         fc1_out = self.relu(self.fc1(dropped))
         output = self.fc2(fc1_out)
+        
+        # Output sanitization
+        output = torch.nan_to_num(output, nan=0.0, posinf=1.0, neginf=-1.0)
         
         return output
 
@@ -174,7 +189,7 @@ class GRUTrainer:
         self.hidden_size = self.model_config.get('hidden_size', 128)
         self.num_layers = self.model_config.get('num_layers', 2)
         self.dropout = self.model_config.get('dropout', 0.2)
-        self.learning_rate = self.model_config.get('learning_rate', 0.001)
+        self.learning_rate = self.model_config.get('learning_rate', 0.0001)  # More conservative learning rate
         # Optimizer selection (default Adam, allow RMSprop/AdamW/SGD via config)
         self.optimizer_name = str(self.model_config.get('optimizer', 'Adam')).lower()
         self.batch_size = self.model_config.get('batch_size', 64)
@@ -182,10 +197,10 @@ class GRUTrainer:
         self.early_stopping_patience = self.model_config.get('early_stopping_patience', 10)
 
         # Training optimization settings
-        self.mixed_precision = self.training_config.get('mixed_precision', True)
+        self.mixed_precision = self.training_config.get('mixed_precision', False)  # Disable by default for stability
         self.num_workers = self.training_config.get('num_workers', 4)
         self.pin_memory = self.training_config.get('pin_memory', True)
-        self.max_grad_norm = float(self.training_config.get('max_grad_norm', 1.0))
+        self.max_grad_norm = float(self.training_config.get('max_grad_norm', 0.5))  # Lower gradient clipping
         
         # Initialize model components
         self.model = None
@@ -687,9 +702,16 @@ class GRUTrainer:
                     
                     # Log model with signature and input example
                     try:
+                        # Create model signature
+                        with torch.no_grad():
+                            sample_output = self.model(sample_input)
+                        
+                        # Convert to numpy for MLflow signature
+                        input_example = sample_input.cpu().numpy()
+                        
                         mlflow.pytorch.log_model(  # type: ignore[attr-defined]
                             self.model,
-                            artifact_path="model"
+                            "gru_model"  # artifact_path as positional argument
                         )
                     except Exception as e:
                         logger.warning(f"MLflow log_model failed: {e}")

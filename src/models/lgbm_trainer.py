@@ -332,10 +332,13 @@ class LightGBMTrainer:
                 
                 # Log model with signature and input example
                 if MLFLOW_AVAILABLE and mlflow is not None and hasattr(mlflow, "lightgbm"):
-                    mlflow.lightgbm.log_model(  # type: ignore[attr-defined]
-                        self.model,
-                        artifact_path="model"
-                    )
+                    try:
+                        mlflow.lightgbm.log_model(  # type: ignore[attr-defined]
+                            self.model,
+                            "lightgbm_model"  # artifact_path as positional argument
+                        )
+                    except Exception as e:
+                        logger.warning(f"MLflow log_model failed: {e}")
         
         # Training results
         results = {
