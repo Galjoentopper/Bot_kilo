@@ -41,7 +41,6 @@ Collects historical market data for training.
 - `./train_models.sh --symbols BTCEUR` - Train specific symbol
 - `./train_models.sh --resume` - Resume from checkpoint
 - `./train_models.sh --checkpoint-dir /path/to/checkpoints` - Custom checkpoint location
-- `./train_models.sh --auto-checkpoint` - Enable auto-checkpointing
 
 **Important:** Training creates a transfer package in `models/exports/` for Windows.
 
@@ -73,7 +72,7 @@ Starts paper trading with imported models.
 # Full training workflow
 ./setup_training_environment.sh
 ./fetch_training_data.sh
-./train_models.sh --auto-checkpoint
+./train_models.sh
 
 # Resume interrupted training
 ./train_models.sh --resume

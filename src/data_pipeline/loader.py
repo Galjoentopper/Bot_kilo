@@ -29,9 +29,9 @@ class DataLoader:
             data_dir: Directory containing SQLite database files
         """
         self.data_dir = data_dir
-        self.symbols = ["BTCEUR", "ETHEUR", "ADAEUR", "SOLEUR", "XRPEUR"]
+        self.symbols = ["BTCEUR", "ETHEUR", "ADAEUR", "DOTEUR", "LINKEUR"]
         # Base interval of stored DBs (observed in repo)
-        self.interval = "15m"
+        self.interval = "30m"
         
         # Validate data directory
         if not os.path.exists(data_dir):

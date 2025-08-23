@@ -13,7 +13,6 @@ REM
 REM Checkpoint Options (for 6-hour runtime limits):
 REM   train_models.bat --resume           - Resume from last checkpoint
 REM   train_models.bat --checkpoint-dir checkpoints\custom - Use custom checkpoint directory
-REM   train_models.bat --auto-checkpoint  - Enable automatic checkpointing (default: enabled)
 REM ============================================================================
 
 setlocal enabledelayedexpansion
@@ -82,7 +81,7 @@ if not errorlevel 1 (
 )
 
 REM Run the enhanced trainer with packaging and checkpoint support enabled
-python scripts\enhanced_trainer.py --package-models --create-transfer-bundle --auto-checkpoint %*
+python scripts\enhanced_trainer.py --package-models --create-transfer-bundle %*
 
 if errorlevel 1 (
     echo.
