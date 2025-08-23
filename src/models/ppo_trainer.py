@@ -11,6 +11,7 @@ import pandas as pd
 from typing import Dict, List, Optional, Tuple, Any, Union
 import logging
 import os
+import random
 from datetime import datetime
 import torch
 import torch.nn as nn
@@ -212,7 +213,37 @@ class PPOTrainer:
         self.input_size = None  # Size of observation space
         self.feature_count = None
 
-        logger.info(f"PPO Trainer initialized with device: {self.device}")
+        # Set default seed for reproducibility
+        self.seed = config.get('seed', 42)
+        self._set_seeds(self.seed)
+        
+        logger.info(f"PPO Trainer initialized with device: {self.device}, seed: {self.seed}")
+    
+    def _set_seeds(self, seed: int) -> None:
+        """Set seeds for all random number generators for reproducibility
+        
+        Args:
+            seed: Random seed value
+        """
+        # Set Python random seed
+        random.seed(seed)
+        
+        # Set NumPy seed
+        np.random.seed(seed)
+        
+        # Set PyTorch seeds
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed(seed)
+            torch.cuda.manual_seed_all(seed)
+            # Additional CUDA determinism settings
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
+        
+        # Set Stable Baselines3 seed (will be used in model creation)
+        self._sb3_seed = seed
+        
+        logger.debug(f"All random seeds set to {seed} for reproducibility")
     
     def create_environment(
         self,
@@ -251,7 +282,9 @@ class PPOTrainer:
         if env_kwargs:
             default_kwargs.update(env_kwargs)
         
-        # Create training environment
+        # Create training environment with consistent seeding
+        env_seed = getattr(self, 'seed', 42)
+        
         def make_train_env(*args, **kwargs):
             # Domain randomization over time windows
             total = len(train_data)
@@ -271,17 +304,20 @@ class PPOTrainer:
         n_envs = 8  # Number of parallel environments
         
         # For SubprocVecEnv, we need to create the environment creation function
-        # in a way that's picklable
-        def make_env_fn(data, kwargs):
+        # in a way that's picklable with different but deterministic seeds
+        def make_env_fn(data, kwargs, env_id):
             def _init(*args, **env_kwargs):
-                env = TradingEnvironment(data, **kwargs)
+                env_kwargs_with_seed = kwargs.copy()
+                env_kwargs_with_seed['seed'] = env_seed + env_id  # Different seed per env
+                env = TradingEnvironment(data, **env_kwargs_with_seed)
                 env = Monitor(env)
                 return env
             return _init
         
-        # Create environment functions that are picklable
-        env_fns = [make_env_fn(train_data, default_kwargs) for _ in range(n_envs)]
+        # Create environment functions that are picklable with different seeds
+        env_fns = [make_env_fn(train_data, default_kwargs, i) for i in range(n_envs)]
         self.env = SubprocVecEnv(env_fns)
+        logger.info(f"Created {n_envs} parallel training environments with seeds {env_seed} to {env_seed + n_envs - 1}")
         # Wrap with normalization (train)
         if SB3_AVAILABLE:
             try:
@@ -294,6 +330,9 @@ class PPOTrainer:
                     clip_obs=10.0,
                     clip_reward=10.0,
                 )
+                # Set seed for the VecNormalize wrapper
+                self.env.seed(env_seed)
+                logger.info(f"Applied VecNormalize wrapper with seed {env_seed}")
             except Exception:
                 pass
         
@@ -304,8 +343,16 @@ class PPOTrainer:
                 env = Monitor(env)
                 return env
             
-            # For evaluation, we typically use a single environment
-            self.eval_env = DummyVecEnv([make_eval_env])
+            # For evaluation, we typically use a single environment with consistent seed
+            def make_eval_env_with_seed():
+                eval_kwargs_with_seed = default_kwargs.copy()
+                eval_kwargs_with_seed['seed'] = env_seed + 1000  # Different seed for eval
+                env = TradingEnvironment(eval_data, **eval_kwargs_with_seed)
+                env = Monitor(env)
+                return env
+            
+            self.eval_env = DummyVecEnv([make_eval_env_with_seed])
+            logger.info(f"Created evaluation environment with seed {env_seed + 1000}")
             # Wrap eval with VecNormalize (in eval mode) and load stats if available
             if SB3_AVAILABLE:
                 try:
@@ -411,7 +458,7 @@ class PPOTrainer:
                 policy_kwargs=policy_kwargs,
                 device=self.device,
                 verbose=1,
-                seed=42  # Set seed for reproducibility
+                seed=getattr(self, '_sb3_seed', 42)  # Use consistent seed
             )
         else:
             self.model = PPO()  # Use dummy class
@@ -441,6 +488,9 @@ class PPOTrainer:
             Training results dictionary
         """
         logger.info("Starting PPO agent training")
+        
+        # Ensure consistent seeding at the start of training
+        self._set_seeds(self.seed)
         
         # Create environments
         train_env, eval_env = self.create_environment(train_data, eval_data)

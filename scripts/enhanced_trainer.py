@@ -709,107 +709,149 @@ def main() -> None:
                 train_idx_final = np.arange(int(n*0.8))
                 val_idx_final = np.arange(int(n*0.8), n)
 
-                if model_type == 'ppo':
-                    ppo_X_final = metadata.get('_runtime', {}).get('full_data', metadata.get('full_data', X))
-                    final_results = final_adapter.fit(
-                        X=ppo_X_final,
-                        y=y,
-                        train_idx=train_idx_final,
-                        valid_idx=val_idx_final,
-                        experiment_name=f"{args.experiment_name}_{symbol}_{model_type}_final"
-                    )
-                else:
-                    final_results = final_adapter.fit(
-                        X=X,
-                        y=y,
-                        train_idx=train_idx_final,
-                        valid_idx=val_idx_final,
-                        experiment_name=f"{args.experiment_name}_{symbol}_{model_type}_final"
-                    )
-
-                # Save artifacts layout
-                run_id = datetime.now().strftime('%Y%m%d_%H%M%S')
-                model_dir = os.path.join(args.output_dir, model_type, symbol, run_id)
-                os.makedirs(model_dir, exist_ok=True)
-                saved_path = final_adapter.save(os.path.join(args.output_dir, model_type, symbol), run_id=run_id)
-
-                # Extra artifacts
-                with open(os.path.join(saved_path, 'features.json'), 'w') as f:
-                    json.dump({'feature_names': list(getattr(X, 'columns', [])), 'feature_count': int(getattr(X, 'shape', [0,0])[1])}, f, indent=2)
-                with open(os.path.join(saved_path, 'cv_results.json'), 'w') as f:
-                    json.dump([_sanitize_results(r) for r in cv_results], f, indent=2)
-                if calibrators:
-                    for i, cal in enumerate(calibrators):
-                        cal.save(os.path.join(saved_path, f'calibrator_fold{i}'))
-                if saved_threshold is not None:
-                    with open(os.path.join(saved_path, 'threshold.json'), 'w') as f:
-                        json.dump(saved_threshold, f, indent=2)
-
-                latest_path = os.path.join(args.output_dir, model_type, symbol, 'latest')
-                if os.path.exists(latest_path):
-                    try:
-                        os.remove(latest_path) if os.path.islink(latest_path) else shutil.rmtree(latest_path)
-                    except Exception:
-                        pass
+                # Bulletproof PPO training with guaranteed cleanup
+                saved_path = None
                 try:
-                    os.symlink(saved_path, latest_path)
-                except Exception:
-                    # On Windows, create a copy of latest pointer info
-                    with open(os.path.join(os.path.dirname(latest_path), 'latest_pointer.txt'), 'w') as f:
-                        f.write(saved_path)
-
-                logger.info(f"Saved {model_type} artifacts to {saved_path}")
-                trained_models.append((model_type, symbol))
-                
-                # Clean up PPO trainer after saving to prevent memory leaks and PC crashes
-                if model_type == 'ppo':
-                    try:
-                        if hasattr(final_adapter, 'trainer') and hasattr(final_adapter.trainer, 'cleanup'):
-                            final_adapter.trainer.cleanup()
-                            logger.info(f"PPO trainer cleanup completed for {symbol}")
-                        elif hasattr(final_adapter, 'cleanup'):
-                            final_adapter.cleanup()
-                            logger.info(f"PPO adapter cleanup completed for {symbol}")
-                    except Exception as e:
-                        logger.warning(f"PPO cleanup failed for {symbol}: {e}")
-                
-                # Update checkpoint progress
-                model_key = f"{symbol}_{model_type}"
-                current_progress.completed_models.append(model_key)
-                
-                # Save checkpoint after each model completion
-                try:
-                    checkpoint_manager.save_checkpoint(
-                        progress=current_progress,
-                        config={
-                            'symbols': symbols_to_train,
-                            'models': model_list,
-                            'interval': interval,
-                            'target_type': target_type,
-                            'target_horizon': target_horizon,
-                            'n_splits': n_splits,
-                            'embargo': embargo,
-                            'fee_bps': fee_bps,
-                            'slippage_bps': slippage_bps,
-                            'turnover_lambda': turnover_lambda,
-                            'cache': cache,
-                            'objective': objective,
-                            'seed': seed,
-                            'start_date': start_date
-                        }
-                    )
-                    logger.debug(f"Checkpoint saved after completing {model_type} for {symbol}")
-                except Exception as e:
-                    logger.error(f"Failed to save checkpoint: {e}")
-                
-                # Notify model completion
-                if notifier and getattr(notifier, 'enabled', False):
-                    try:
-                        notifier.send_message_sync(
-                            f"✅ <b>{model_type.upper()} trained</b> for <b>{symbol}</b>\nArtifacts: {os.path.basename(saved_path)}"
+                    # Training phase
+                    if model_type == 'ppo':
+                        ppo_X_final = metadata.get('_runtime', {}).get('full_data', metadata.get('full_data', X))
+                        final_results = final_adapter.fit(
+                            X=ppo_X_final,
+                            y=y,
+                            train_idx=train_idx_final,
+                            valid_idx=val_idx_final,
+                            experiment_name=f"{args.experiment_name}_{symbol}_{model_type}_final"
                         )
+                    else:
+                        final_results = final_adapter.fit(
+                            X=X,
+                            y=y,
+                            train_idx=train_idx_final,
+                            valid_idx=val_idx_final,
+                            experiment_name=f"{args.experiment_name}_{symbol}_{model_type}_final"
+                        )
+
+                    # Save phase - only if training succeeded
+                    run_id = datetime.now().strftime('%Y%m%d_%H%M%S')
+                    model_dir = os.path.join(args.output_dir, model_type, symbol, run_id)
+                    os.makedirs(model_dir, exist_ok=True)
+                    saved_path = final_adapter.save(os.path.join(args.output_dir, model_type, symbol), run_id=run_id)
+
+                    # Extra artifacts
+                    with open(os.path.join(saved_path, 'features.json'), 'w') as f:
+                        json.dump({'feature_names': list(getattr(X, 'columns', [])), 'feature_count': int(getattr(X, 'shape', [0,0])[1])}, f, indent=2)
+                    with open(os.path.join(saved_path, 'cv_results.json'), 'w') as f:
+                        json.dump([_sanitize_results(r) for r in cv_results], f, indent=2)
+                    if calibrators:
+                        for i, cal in enumerate(calibrators):
+                            cal.save(os.path.join(saved_path, f'calibrator_fold{i}'))
+                    if saved_threshold is not None:
+                        with open(os.path.join(saved_path, 'threshold.json'), 'w') as f:
+                            json.dump(saved_threshold, f, indent=2)
+
+                    # Update latest pointer - improved Windows behavior
+                    latest_path = os.path.join(args.output_dir, model_type, symbol, 'latest')
+                    if os.path.exists(latest_path):
+                        try:
+                            os.remove(latest_path) if os.path.islink(latest_path) else shutil.rmtree(latest_path)
+                        except Exception:
+                            pass
+                    
+                    # Try symlink first, fallback to atomic manifest
+                    try:
+                        os.symlink(saved_path, latest_path)
                     except Exception:
-                        pass
+                        # Atomic manifest creation for Windows
+                        manifest_data = {
+                            'symbol': symbol,
+                            'model': model_type,
+                            'run_id': run_id,
+                            'saved_path': saved_path,
+                            'timestamp': datetime.now().isoformat()
+                        }
+                        manifest_path = os.path.join(args.output_dir, model_type, symbol, 'latest_manifest.json')
+                        temp_manifest = manifest_path + '.tmp'
+                        
+                        with open(temp_manifest, 'w') as f:
+                            json.dump(manifest_data, f, indent=2)
+                        os.replace(temp_manifest, manifest_path)
+                        
+                        # Keep backward compatibility with pointer file
+                        pointer_path = os.path.join(os.path.dirname(latest_path), 'latest_pointer.txt')
+                        temp_pointer = pointer_path + '.tmp'
+                        with open(temp_pointer, 'w') as f:
+                            f.write(saved_path)
+                        os.replace(temp_pointer, pointer_path)
+
+                    logger.info(f"Saved {model_type} artifacts to {saved_path}")
+                    trained_models.append((model_type, symbol))
+                    
+                    # Checkpoint update
+                    model_key = f"{symbol}_{model_type}"
+                    current_progress.completed_models.append(model_key)
+                    
+                except Exception as e:
+                    logger.error(f"Failed training/saving {model_type} for {symbol}: {e}")
+                    if notifier and getattr(notifier, 'enabled', False):
+                        try:
+                            notifier.send_message_sync(
+                                f"🚨 <b>Training/Save error</b>\n<b>Symbol:</b> {symbol}\n<b>Model:</b> {model_type}\n<b>Message:</b> {str(e)}"
+                            )
+                        except Exception:
+                            pass
+                    # Continue to finally block for cleanup
+                finally:
+                    # GUARANTEED cleanup for PPO - always runs regardless of success/failure
+                    if model_type == 'ppo':
+                        try:
+                            if hasattr(final_adapter, 'trainer') and hasattr(final_adapter.trainer, 'cleanup'):
+                                final_adapter.trainer.cleanup()
+                                logger.info(f"PPO trainer cleanup completed for {symbol}")
+                            elif hasattr(final_adapter, 'cleanup'):
+                                final_adapter.cleanup()
+                                logger.info(f"PPO adapter cleanup completed for {symbol}")
+                        except Exception as e:
+                            logger.warning(f"PPO cleanup failed for {symbol}: {e}")
+                
+                # Only proceed with checkpoint and notification if save was successful
+                if saved_path:
+                    # Update checkpoint progress
+                    model_key = f"{symbol}_{model_type}"
+                    current_progress.completed_models.append(model_key)
+                
+                    # Save checkpoint after each model completion
+                    try:
+                        checkpoint_manager.save_checkpoint(
+                            progress=current_progress,
+                            config={
+                                'symbols': symbols_to_train,
+                                'models': model_list,
+                                'interval': interval,
+                                'target_type': target_type,
+                                'target_horizon': target_horizon,
+                                'n_splits': n_splits,
+                                'embargo': embargo,
+                                'fee_bps': fee_bps,
+                                'slippage_bps': slippage_bps,
+                                'turnover_lambda': turnover_lambda,
+                                'cache': cache,
+                                'objective': objective,
+                                'seed': seed,
+                                'start_date': start_date
+                            }
+                        )
+                        logger.debug(f"Checkpoint saved after completing {model_type} for {symbol}")
+                    except Exception as e:
+                        logger.error(f"Failed to save checkpoint: {e}")
+                    
+                    # Notify model completion
+                    if notifier and getattr(notifier, 'enabled', False):
+                        try:
+                            notifier.send_message_sync(
+                                f"✅ <b>{model_type.upper()} trained</b> for <b>{symbol}</b>\nArtifacts: {os.path.basename(saved_path)}"
+                            )
+                        except Exception:
+                            pass
 
             except Exception as e:
                 logger.error(f"Failed training {model_type} for {symbol}: {e}")
