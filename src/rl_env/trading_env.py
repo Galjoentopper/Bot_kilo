@@ -87,6 +87,15 @@ class TradingEnvironment(gym.Env):
         logger.info(f"Trading environment initialized with {len(self.data)} steps")
         logger.info(f"Action space: {self.action_space}")
         logger.info(f"Observation space: {self.observation_space.shape}")
+        
+        # Store seed for later use
+        self._seed = None
+
+    def seed(self, seed: Optional[int] = None) -> None:
+        """Set the seed for the environment's random number generator."""
+        self._seed = seed
+        if seed is not None:
+            np.random.seed(seed)
 
     def _preprocess_data(self) -> None:
         # Feature columns (exclude 'close')
@@ -100,8 +109,10 @@ class TradingEnvironment(gym.Env):
         self._normalized_data = market
 
     def reset(self, *, seed=None, options=None) -> Tuple[np.ndarray, Dict]:
-        if seed is not None:
-            np.random.seed(seed)
+        # Use provided seed or stored seed
+        effective_seed = seed if seed is not None else self._seed
+        if effective_seed is not None:
+            np.random.seed(effective_seed)
         self.current_step = self.lookback_window
         self.balance = float(self.initial_balance)
         self.position = 0.0

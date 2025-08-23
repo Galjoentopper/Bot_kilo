@@ -307,10 +307,11 @@ class PPOTrainer:
         # in a way that's picklable with different but deterministic seeds
         def make_env_fn(data, kwargs, env_id):
             def _init(*args, **env_kwargs):
-                env_kwargs_with_seed = kwargs.copy()
-                env_kwargs_with_seed['seed'] = env_seed + env_id  # Different seed per env
-                env = TradingEnvironment(data, **env_kwargs_with_seed)
+                # Create environment without seed parameter
+                env = TradingEnvironment(data, **kwargs)
                 env = Monitor(env)
+                # Set seed through reset method
+                env.seed(env_seed + env_id)  # Different seed per env
                 return env
             return _init
         
@@ -345,10 +346,11 @@ class PPOTrainer:
             
             # For evaluation, we typically use a single environment with consistent seed
             def make_eval_env_with_seed():
-                eval_kwargs_with_seed = default_kwargs.copy()
-                eval_kwargs_with_seed['seed'] = env_seed + 1000  # Different seed for eval
-                env = TradingEnvironment(eval_data, **eval_kwargs_with_seed)
+                # Create environment without seed parameter
+                env = TradingEnvironment(eval_data, **default_kwargs)
                 env = Monitor(env)
+                # Set seed through reset method
+                env.seed(env_seed + 1000)  # Different seed for eval
                 return env
             
             self.eval_env = DummyVecEnv([make_eval_env_with_seed])
