@@ -502,6 +502,14 @@ def main() -> None:
     logger.info(f"Enhanced Trainer settings: interval={interval}, target={target_type}, splits={n_splits}, embargo={embargo}, fees={fee_bps}bps, slippage={slippage_bps}bps, turnover_lambda={turnover_lambda}, cache={cache}, objective={objective}, max_workers={max_workers}, start_date={start_date}")
     logger.info(f"Model packaging: enabled={args.package_models or args.create_transfer_bundle}")
 
+    # Determine model list before checkpoint initialization
+    default_models = trainer_cfg.get('default_models')
+    if args.models is None:
+        # If not specified in CLI or config, include PPO by default alongside GRU and LightGBM
+        model_list = default_models if isinstance(default_models, list) else ['lightgbm','gru','ppo']
+    else:
+        model_list = ['gru','lightgbm','ppo'] if args.models == ['all'] else args.models
+
     # Initialize checkpoint system
     global checkpoint_manager, shutdown_requested, current_progress
     checkpoint_manager = TrainingCheckpoint(args.checkpoint_dir)
@@ -542,13 +550,6 @@ def main() -> None:
     # CV splitter and metrics
     cv_splitter = PurgedTimeSeriesSplit(n_splits=n_splits, gap=embargo, embargo=embargo)
     metrics_calc = TradingMetrics(fee_bps=fee_bps, slippage_bps=slippage_bps)
-
-    default_models = trainer_cfg.get('default_models')
-    if args.models is None:
-        # If not specified in CLI or config, include PPO by default alongside GRU and LightGBM
-        model_list = default_models if isinstance(default_models, list) else ['lightgbm','gru','ppo']
-    else:
-        model_list = ['gru','lightgbm','ppo'] if args.models == ['all'] else args.models
 
     # Notify start of training (after model_list is known)
     if notifier and getattr(notifier, 'enabled', False):
