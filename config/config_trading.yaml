@@ -1,0 +1,218 @@
+# Configuration for Trading Computer
+# This configuration is optimized for running paper trading on a slower machine
+
+# Data Configuration
+data:
+  symbols: ['BTCEUR', 'ETHEUR', 'ADAEUR', 'DOTEUR', 'LINKEUR']
+  interval: '30m'
+  lookback_days: 30  # Reduced for faster loading
+  cache_duration: 300  # 5 minutes cache
+  
+# Trading Configuration
+trading:
+  initial_balance: 10000
+  max_position_size: 0.1
+  transaction_fee: 0.001
+  slippage: 0.0005
+  
+  # Risk management
+  stop_loss: 0.02
+  take_profit: 0.04
+  max_drawdown: 0.1
+  
+  # Trading intervals
+  signal_interval: 300  # 5 minutes
+  execution_interval: 60   # 1 minute
+  
+  # Position management
+  max_positions: 3
+  position_timeout: 86400  # 24 hours
+
+# Model Configuration (for inference only)
+models:
+  lightgbm:
+    enabled: true
+    weight: 0.4  # Model ensemble weight
+  
+  gru:
+    enabled: true
+    weight: 0.4
+  
+  ppo:
+    enabled: true
+    weight: 0.2
+  
+  # Model loading preferences
+  loading_strategy: ['packaged', 'imported', 'best_wf', 'latest', 'unified']
+  validation_required: true
+  fallback_enabled: true
+
+# Feature Engineering (lightweight for trading)
+features:
+  technical_indicators: true
+  price_features: true
+  volume_features: true
+  volatility_features: true
+  momentum_features: true
+  trend_features: true
+  statistical_features: false  # Disabled for performance
+  
+  # Advanced features (disabled on trading machine)
+  fourier_features: false
+  wavelet_features: false
+  fractal_features: false
+  entropy_features: false
+  
+  # Feature caching
+  cache_features: true
+  cache_duration: 300  # 5 minutes
+
+# Data Sources
+data_sources:
+  primary: 'binance'
+  fallback: 'ccxt'
+  
+  # API configuration
+  binance:
+    rate_limit: true
+    timeout: 30000
+    retries: 3
+    retry_delay: 5
+  
+  ccxt:
+    exchange: 'binance'
+    sandbox: false
+    rate_limit: true
+
+# Performance Optimization
+performance:
+  max_workers: 2  # Limited workers for slower machine
+  batch_size: 64  # Smaller batch size
+  memory_limit: '4GB'
+  
+  # Caching
+  enable_caching: true
+  cache_size: 1000
+  
+  # Garbage collection
+  gc_interval: 600  # 10 minutes
+  
+# Model Management
+model_management:
+  models_dir: 'models'
+  
+  # Model sources (in order of preference)
+  search_paths:
+    - 'models/packages'     # Packaged models (highest priority)
+    - 'models/imported'     # Imported from other machines
+    - 'models/metadata'     # Best walk-forward models
+    - 'models'              # Latest local models
+    - 'models/*/latest'     # Unified trainer artifacts
+  
+  # Model validation
+  validate_on_load: true
+  validation_timeout: 30  # seconds
+  
+  # Model updates
+  auto_reload: false
+  reload_interval: 3600  # 1 hour
+
+# Logging Configuration
+logging:
+  level: 'INFO'
+  file: 'logs/trading.log'
+  max_size: '50MB'
+  backup_count: 3
+  format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+  
+  # Console logging
+  console_level: 'INFO'
+  console_format: '%(levelname)s: %(message)s'
+
+# Monitoring Configuration
+monitoring:
+  enabled: true
+  metrics_interval: 600  # 10 minutes
+  save_metrics: true
+  metrics_file: 'logs/performance_metrics.json'
+  
+  # Performance alerts
+  memory_threshold: 0.8
+  cpu_threshold: 0.9
+  
+# Notifications
+notifications:
+  telegram:
+    enabled: false  # Set to true and add credentials if needed
+    bot_token: ''
+    chat_id: ''
+    
+    # Notification triggers
+    on_trade: true
+    on_error: true
+    on_startup: true
+    on_shutdown: true
+    
+    # Rate limiting
+    max_messages_per_hour: 10
+  
+  email:
+    enabled: false
+    smtp_server: ''
+    smtp_port: 587
+    username: ''
+    password: ''
+    to_address: ''
+
+# Error Handling
+error_handling:
+  max_retries: 3
+  retry_delay: 5  # seconds
+  
+  # Fallback behavior
+  on_model_failure: 'skip'  # 'skip', 'hold', 'fallback'
+  on_data_failure: 'cache'  # 'cache', 'skip', 'retry'
+  
+  # Recovery
+  auto_recovery: true
+  recovery_timeout: 300  # 5 minutes
+
+# Security
+security:
+  api_keys_file: '.env'  # Store API keys in environment file
+  encrypt_logs: false
+  
+# Backup Configuration
+backup:
+  enabled: true
+  backup_dir: 'backups'
+  
+  # What to backup
+  backup_models: true
+  backup_logs: true
+  backup_config: true
+  
+  # Backup schedule
+  daily_backup: true
+  keep_backups: 7  # days
+  
+# Environment Specific
+environment:
+  type: 'trading'
+  machine_id: 'trading-pc'
+  python_version: '3.8+'
+  required_memory: '2GB'
+  recommended_memory: '4GB'
+  gpu_required: false
+  gpu_recommended: false
+  
+  # Resource constraints
+  max_cpu_usage: 0.7
+  max_memory_usage: 0.8
+  
+# Development/Debug Settings
+debug:
+  enabled: false
+  log_predictions: false
+  save_debug_data: false
+  profiling: false

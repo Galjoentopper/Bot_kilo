@@ -1,0 +1,160 @@
+# Configuration for Training Computer
+# This configuration is optimized for model training on a powerful machine
+
+# Data Configuration
+data:
+  symbols: ['BTCEUR', 'ETHEUR', 'ADAEUR', 'DOTEUR', 'LINKEUR']
+  interval: '30m'
+  lookback_days: 365
+  validation_split: 0.2
+  test_split: 0.1
+  
+# Training Configuration
+training:
+  # Cross-validation settings
+  cv_splits: 5
+  embargo_period: 24  # hours
+  
+  # Model training parameters
+  max_workers: 8  # Use more workers on powerful machine
+  batch_size: 512
+  epochs: 100
+  early_stopping_patience: 10
+  
+  # Optimization
+  optuna_trials: 100  # More trials for better optimization
+  optuna_timeout: 7200  # 2 hours
+  
+  # Resource allocation
+  memory_limit: '16GB'
+  gpu_enabled: true
+  gpu_memory_fraction: 0.8
+
+# Model Configuration
+models:
+  lightgbm:
+    enabled: true
+    params:
+      objective: 'regression'
+      metric: 'rmse'
+      boosting_type: 'gbdt'
+      num_leaves: 31
+      learning_rate: 0.05
+      feature_fraction: 0.9
+      bagging_fraction: 0.8
+      bagging_freq: 5
+      verbose: -1
+      n_estimators: 1000
+      early_stopping_rounds: 50
+  
+  gru:
+    enabled: true
+    params:
+      hidden_size: 128
+      num_layers: 3
+      dropout: 0.2
+      learning_rate: 0.001
+      batch_size: 512
+      sequence_length: 60
+      epochs: 100
+  
+  ppo:
+    enabled: true
+    params:
+      learning_rate: 0.0003
+      n_steps: 2048
+      batch_size: 64
+      n_epochs: 10
+      gamma: 0.99
+      gae_lambda: 0.95
+      clip_range: 0.2
+      ent_coef: 0.01
+      vf_coef: 0.5
+      max_grad_norm: 0.5
+      total_timesteps: 100000
+
+# Feature Engineering
+features:
+  technical_indicators: true
+  price_features: true
+  volume_features: true
+  volatility_features: true
+  momentum_features: true
+  trend_features: true
+  statistical_features: true
+  
+  # Advanced features (enabled on training machine)
+  fourier_features: true
+  wavelet_features: true
+  fractal_features: true
+  entropy_features: true
+  
+  # Feature selection
+  feature_selection: true
+  max_features: 200
+  selection_method: 'mutual_info'
+
+# Trading Configuration (for backtesting)
+trading:
+  initial_balance: 10000
+  max_position_size: 0.1
+  transaction_fee: 0.001
+  slippage: 0.0005
+  
+  # Risk management
+  stop_loss: 0.02
+  take_profit: 0.04
+  max_drawdown: 0.1
+
+# Output Configuration
+output:
+  base_dir: 'models'
+  save_models: true
+  save_metadata: true
+  save_features: true
+  save_preprocessors: true
+  
+  # Model packaging
+  create_packages: true
+  create_transfer_bundle: true
+  package_compression: 'zip'
+  
+  # Versioning
+  version_models: true
+  keep_versions: 5
+
+# Logging Configuration
+logging:
+  level: 'INFO'
+  file: 'logs/training.log'
+  max_size: '100MB'
+  backup_count: 5
+  format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+
+# MLflow Configuration
+mlflow:
+  enabled: true
+  tracking_uri: 'file:./mlruns'
+  experiment_name: 'trading_models'
+  
+# Telegram Notifications
+telegram:
+  enabled: false  # Set to true and add credentials if needed
+  bot_token: ''
+  chat_id: ''
+  
+# Performance Monitoring
+monitoring:
+  enabled: true
+  metrics_interval: 300  # seconds
+  save_metrics: true
+  
+# Environment Specific
+environment:
+  type: 'training'
+  machine_id: 'training-pc'
+  python_version: '3.9+'
+  required_memory: '8GB'
+  recommended_memory: '16GB'
+  gpu_required: false
+  gpu_recommended: true
