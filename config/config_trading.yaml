@@ -144,8 +144,8 @@ monitoring:
 notifications:
   telegram:
     enabled: false  # Set to true and add credentials if needed
-    bot_token: ''
-    chat_id: ''
+    bot_token: '7733436451:AAH6Sls8uL4fEgd6Ty7VEKSBIMauhaVkN4c
+    chat_id: '7988790407'
     
     # Notification triggers
     on_trade: true

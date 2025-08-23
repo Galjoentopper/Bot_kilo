@@ -1,109 +1,58 @@
-# Bot Kilo - Crypto Trading Bot Training System
+Bot Kilo — Crypto Trading Bot: Training and Model Transfer
 
-A comprehensive cryptocurrency trading bot with machine learning models and automated training capabilities.
+This guide shows how to train models on a Linux machine and import them on your Windows machine. Keep training off Windows (it’s too slow) — only import there.
 
-## Quick Start
+Quick overview
+- Train on Linux using the provided .sh scripts
+- A transfer bundle ZIP is created under models/exports/
+- Copy the ZIP to Windows and import it
 
-### 1. Setup Environment
-```bash
-# On Linux/Mac
-./setup_training_environment.sh
+1) Linux (training machine)
+Prerequisites
+- Python 3.8+ and pip
+- Linux shell with permission to execute scripts
 
-# On Windows
-.\setup_training_environment.bat
-```
+Initial setup (run once)
+1. Make scripts executable:
+   chmod +x setup_training_environment.sh train_models.sh fetch_training_data.sh
+2. Run setup (creates venv, installs dependencies, prepares folders):
+   ./setup_training_environment.sh
 
-### 2. Get Market Data
-```bash
-# On Linux/Mac
-./fetch_training_data.sh
+(Optional) fetch or update training data
+- Default (all symbols from config):
+  ./fetch_training_data.sh
+- Single symbol example:
+  ./fetch_training_data.sh --symbol BTCEUR
 
-# On Windows PowerShell
-.\fetch_training_data.ps1
-```
+Train and package models (creates transfer bundle automatically)
+- Train with defaults (all configured models/symbols):
+  ./train_models.sh
+- Train specific symbols:
+  ./train_models.sh --symbols BTCEUR ETHEUR ADAEUR
+- Train only LightGBM:
+  ./train_models.sh --models lightgbm
+- Resume after interruption (checkpointing supported):
+  ./train_models.sh --resume
 
-### 3. Start Training
-```bash
-# Basic training (all models, all symbols)
-./train_models.sh
+Result
+- When training finishes, a bundle appears at:
+  models/exports/model_transfer_bundle_YYYYMMDD_HHMMSS.zip
+- If your Linux machine is headless, any “Opening exports folder…” warning is safe to ignore.
 
-# Resume from checkpoint (handles 6-hour limits)
-./train_models.sh --resume
+2) Move bundle to Windows
+- Copy the ZIP from models/exports/ on Linux to your Windows project directory (same repo folder).
 
-# Custom training
-./train_models.sh --symbols BTCEUR,ETHEUR --models ppo,lightgbm
-```
+3) Windows (import only — do not train here)
+- Using the batch file:
+  .\import_models.bat ".\model_transfer_bundle_YYYYMMDD_HHMMSS.zip"
+- Or directly with Python:
+  py scripts\import_models.py ".\model_transfer_bundle_YYYYMMDD_HHMMSS.zip"
 
-## Memory Management & Crash Prevention
+Optional: Validate models (does not start trading)
+- Quick validation examples:
+  py scripts\validate_models.py --models-dir models --quick
+  py scripts\validate_models.py --type lightgbm --models-dir models --quick
 
-**Important**: The system now includes automatic memory cleanup to prevent PC crashes during PPO training:
-
-- **Automatic Environment Cleanup**: PPO environments are properly closed after each model
-- **CUDA Memory Management**: GPU memory is cleared between training sessions
-- **Garbage Collection**: Forced cleanup after each model completion
-- **Checkpoint System**: Training state is saved every model completion
-
-## Checkpoint System
-
-The training system automatically saves progress and can resume from interruptions:
-
-- **Auto-save**: Progress saved after each model completion
-- **Resume**: Use `--resume` flag to continue from last checkpoint
-- **6-hour Limit Handling**: Automatically resumes on remote systems with time limits
-- **Graceful Shutdown**: Ctrl+C saves checkpoint before exit
-
-## Training Options
-
-```bash
-# Available flags
---symbols BTCEUR,ETHEUR,LTCEUR    # Specific symbols
---models ppo,lightgbm,gru         # Specific models  
---resume                          # Resume from checkpoint
---package-models                  # Create transfer bundle
---experiment-name my_experiment   # Custom experiment name
-```
-
-## Model Transfer
-
-After training, use the generated transfer bundle:
-
-1. Training creates `models/exports/transfer_bundle_YYYYMMDD_HHMMSS.zip`
-2. Copy to target machine
-3. Run the included `import_models.py` script
-
-## Troubleshooting
-
-**PC Crashes During Training**: 
-- The new memory cleanup system prevents this
-- If crashes still occur, reduce batch sizes in `src/config/config.yaml`
-
-**Training Interrupted**:
-- Use `./train_models.sh --resume` to continue
-- Check `checkpoints/` directory for saved progress
-
-**Out of Memory**:
-- Reduce `n_steps` and `batch_size` for PPO models
-- Close other applications during training
-
-## File Structure
-
-```
-Bot_kilo/
-├── data/              # Market data databases
-├── models/            # Trained models
-├── checkpoints/       # Training progress saves
-├── logs/              # Training logs
-├── scripts/           # Training scripts
-└── src/               # Source code
-```
-
-## Remote Training
-
-For training on remote machines with time limits:
-
-1. Start training: `./train_models.sh`
-2. When session ends, restart with: `./train_models.sh --resume`
-3. Repeat until all models complete
-4. Download the transfer bundle from `models/exports/`
-
-The checkpoint system ensures no progress is lost between sessions.
+Notes
+- The trainer automatically handles packaging; you don’t need extra steps.
+- Do not train on the Windows machine. Only import there.
