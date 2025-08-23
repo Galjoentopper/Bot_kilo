@@ -35,20 +35,20 @@ git clone <your-repo-url>
 cd Bot_kilo
 
 # Make scripts executable
-chmod +x scripts/setup_training_environment.sh
-chmod +x scripts/train_models.sh
+chmod +x setup_training_environment.sh
+chmod +x train_models.sh
 
 # Run the setup script
-./scripts/setup_training_environment.sh
+./setup_training_environment.sh
 ```
 
 #### Step 2: Collect Training Data (Automated)
 ```bash
 # Make data collection script executable
-chmod +x scripts/fetch_training_data.sh
+chmod +x fetch_training_data.sh
 
 # Run automated data collection
-./scripts/fetch_training_data.sh
+./fetch_training_data.sh
 
 # This will:
 # - Read symbols from config/config_training.yaml
@@ -74,7 +74,7 @@ nano config/config_training.yaml
 #### Step 4: Train Models and Create Transfer Package
 ```bash
 # Start training process
-./scripts/train_models.sh
+./train_models.sh
 
 # This will:
 # - Train GRU, LightGBM, and PPO models
@@ -104,7 +104,7 @@ cd Bot_kilo
 #### Step 3: Import Models
 ```powershell
 # Run the import script
-.\scripts\import_models.bat
+.\import_models.bat
 
 # This will:
 # - Detect the transfer package
@@ -115,13 +115,13 @@ cd Bot_kilo
 #### Step 4: Validate Models (Optional but Recommended)
 ```powershell
 # Validate imported models
-.\scripts\validate_models.bat
+.\validate_models.bat
 ```
 
 #### Step 5: Start Paper Trading
 ```powershell
 # Deploy and start trading
-.\scripts\deploy_trading.bat
+.\deploy_trading.bat
 
 # The bot will start in paper trading mode
 # Press Ctrl+C to stop when needed
@@ -136,29 +136,25 @@ Bot_kilo/
 │   ├── config_training.yaml           # Training configuration
 │   └── config_trading.yaml            # Trading configuration
 ├── data/                              # Trading data (CSV files)
-├── docs/
-│   ├── CROSS_PLATFORM_WORKFLOW.md    # Detailed workflow guide
-│   ├── DISTRIBUTED_TRAINING_GUIDE.md # Training guide
-│   └── TROUBLESHOOTING.md             # Common issues
+├── src/                               # Source code modules
+├── scripts/                           # Python utility scripts
 ├── logs/                              # Application logs
 ├── models/                            # Trained models
 │   ├── exports/                       # Exported model packages
 │   └── backups/                       # Model backups
-├── scripts/
-│   ├── Linux Scripts:
-│   │   ├── setup_training_environment.sh
-│   │   ├── train_models.sh
-│   │   └── fetch_training_data.sh
-│   ├── Windows Scripts:
-│   │   ├── import_models.bat
-│   │   ├── validate_models.bat
-│   │   └── deploy_trading.bat
-│   ├── Core Scripts:
-│   │   ├── enhanced_trainer.py        # Model training
-│   │   ├── enhanced_trader.py         # Trading bot
-│   │   ├── cross_platform_transfer.py # Model transfer
-│   │   └── validate_models.py         # Model validation
-│   └── trader.py                      # Original trader (legacy)
+├── Linux Scripts (root folder):
+│   ├── setup_training_environment.sh  # Training environment setup
+│   ├── train_models.sh                # Model training script
+│   └── fetch_training_data.sh         # Data collection script
+├── Windows Scripts (root folder):
+│   ├── import_models.bat              # Model import utility
+│   ├── validate_models.bat            # Model validation
+│   └── deploy_trading.bat             # Trading deployment
+├── Python Scripts (scripts/ folder):
+│   ├── enhanced_trainer.py            # Model training
+│   ├── enhanced_trader.py             # Trading bot
+│   ├── cross_platform_transfer.py     # Model transfer
+│   └── validate_models.py             # Model validation
 └── processed_packages/                # Processed transfer packages
 ```
 
@@ -250,7 +246,7 @@ type logs\trader.log | Select-Object -Last 50
 1. **Check Logs**: Always check `logs/` directory first
 2. **Validate Models**: Run validation scripts
 3. **Review Configuration**: Ensure YAML files are correct
-4. **Check Documentation**: See `docs/` folder for detailed guides
+4. **Check README**: This file contains all necessary documentation
 
 ## 📊 Monitoring and Logs
 
@@ -308,8 +304,8 @@ python scripts/validate_models.py --models gru lightgbm
 ## 📞 Support
 
 For issues or questions:
-1. Check the `docs/TROUBLESHOOTING.md` file
-2. Review log files in `logs/` directory
-3. Validate your setup with provided scripts
+1. Review log files in `logs/` directory
+2. Validate your setup with provided scripts
+3. Check the troubleshooting section above
 
 **Happy Trading! 🎯**
