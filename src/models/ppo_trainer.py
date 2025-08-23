@@ -890,3 +890,72 @@ class PPOTrainer:
             'best_value': best_value,
             'study': study
         }
+    
+    def cleanup(self) -> None:
+        """
+        Clean up environments and free memory to prevent crashes.
+        This method should be called after training completion to properly
+        close SubprocVecEnv and VecNormalize environments and clear memory.
+        """
+        import gc
+        
+        logger.info("Starting PPO trainer cleanup...")
+        
+        # Close training environment
+        if self.env is not None:
+            try:
+                # Close SubprocVecEnv properly
+                if hasattr(self.env, 'close'):
+                    self.env.close()
+                    logger.info("Training environment closed")
+                # If it's a VecNormalize wrapper, close the underlying env too
+                if hasattr(self.env, 'venv') and hasattr(self.env.venv, 'close'):
+                    self.env.venv.close()
+                    logger.info("Underlying training environment closed")
+            except Exception as e:
+                logger.warning(f"Error closing training environment: {e}")
+            finally:
+                self.env = None
+        
+        # Close evaluation environment
+        if self.eval_env is not None:
+            try:
+                if hasattr(self.eval_env, 'close'):
+                    self.eval_env.close()
+                    logger.info("Evaluation environment closed")
+                # If it's a VecNormalize wrapper, close the underlying env too
+                if hasattr(self.eval_env, 'venv') and hasattr(self.eval_env.venv, 'close'):
+                    self.eval_env.venv.close()
+                    logger.info("Underlying evaluation environment closed")
+            except Exception as e:
+                logger.warning(f"Error closing evaluation environment: {e}")
+            finally:
+                self.eval_env = None
+        
+        # Clear model reference
+        if self.model is not None:
+            try:
+                # Clear model from memory
+                del self.model
+                self.model = None
+                logger.info("Model reference cleared")
+            except Exception as e:
+                logger.warning(f"Error clearing model: {e}")
+        
+        # Clear CUDA cache if available
+        if torch.cuda.is_available():
+            try:
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+                logger.info("CUDA cache cleared")
+            except Exception as e:
+                logger.warning(f"Error clearing CUDA cache: {e}")
+        
+        # Force garbage collection
+        try:
+            collected = gc.collect()
+            logger.info(f"Garbage collection completed - {collected} objects collected")
+        except Exception as e:
+            logger.warning(f"Error during garbage collection: {e}")
+        
+        logger.info("PPO trainer cleanup completed")

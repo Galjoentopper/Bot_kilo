@@ -655,6 +655,17 @@ def main() -> None:
                             valid_idx=val_idx,
                             experiment_name=f"{args.experiment_name}_{symbol}_{model_type}_fold{fold_idx}"
                         )
+                        
+                        # Clean up PPO trainer after each fold to prevent memory accumulation
+                        try:
+                            if hasattr(adapter, 'trainer') and hasattr(adapter.trainer, 'cleanup'):
+                                adapter.trainer.cleanup()
+                                logger.info(f"PPO trainer cleanup completed for {symbol} fold {fold_idx+1}")
+                            elif hasattr(adapter, 'cleanup'):
+                                adapter.cleanup()
+                                logger.info(f"PPO adapter cleanup completed for {symbol} fold {fold_idx+1}")
+                        except Exception as e:
+                            logger.warning(f"PPO cleanup failed for {symbol} fold {fold_idx+1}: {e}")
                     else:
                         fold_results = adapter.fit(
                             X=X,
@@ -707,6 +718,17 @@ def main() -> None:
                         valid_idx=val_idx_final,
                         experiment_name=f"{args.experiment_name}_{symbol}_{model_type}_final"
                     )
+                    
+                    # Clean up PPO trainer to prevent memory leaks and PC crashes
+                    try:
+                        if hasattr(final_adapter, 'trainer') and hasattr(final_adapter.trainer, 'cleanup'):
+                            final_adapter.trainer.cleanup()
+                            logger.info(f"PPO trainer cleanup completed for {symbol}")
+                        elif hasattr(final_adapter, 'cleanup'):
+                            final_adapter.cleanup()
+                            logger.info(f"PPO adapter cleanup completed for {symbol}")
+                    except Exception as e:
+                        logger.warning(f"PPO cleanup failed for {symbol}: {e}")
                 else:
                     final_results = final_adapter.fit(
                         X=X,

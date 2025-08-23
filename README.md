@@ -1,135 +1,109 @@
-# Trading Bot - Complete Setup Guide
+# Bot Kilo - Crypto Trading Bot Training System
 
-This guide walks you through setting up the trading bot from GitHub cloning to running live trades.
+A comprehensive cryptocurrency trading bot with machine learning models and automated training capabilities.
 
-## Overview
+## Quick Start
 
-**Training Computer (Linux):** Powerful machine for model training  
-**Trading Computer (Windows):** Your regular computer for running the bot
-
-## Step 1: Clone Repository
-
+### 1. Setup Environment
 ```bash
-git clone https://github.com/your-username/Bot_kilo.git
-cd Bot_kilo
-```
-
-## Step 2: Linux Training Setup
-
-### 2.1 Environment Setup
-```bash
+# On Linux/Mac
 ./setup_training_environment.sh
-```
-This installs Python dependencies, creates directories, and sets up the training environment.
 
-### 2.2 Fetch Training Data
+# On Windows
+.\setup_training_environment.bat
+```
+
+### 2. Get Market Data
 ```bash
+# On Linux/Mac
 ./fetch_training_data.sh
+
+# On Windows PowerShell
+.\fetch_training_data.ps1
 ```
-Collects historical market data for training.
 
-**Options:**
-- `./fetch_training_data.sh --symbol BTCEUR` - Fetch specific symbol
-- `./fetch_training_data.sh --update` - Update existing data
-
-### 2.3 Train Models
+### 3. Start Training
 ```bash
-./train_models.sh
-```
-
-**Training Options:**
-- `./train_models.sh --symbols BTCEUR` - Train specific symbol
-- `./train_models.sh --resume` - Resume from checkpoint
-- `./train_models.sh --checkpoint-dir /path/to/checkpoints` - Custom checkpoint location
-
-**Important:** Training creates a transfer package in `models/exports/` for Windows.
-
-## Step 3: Windows Trading Setup
-
-### 3.1 Environment Setup
-```cmd
-setup_environment.bat
-```
-Installs Python dependencies and creates necessary directories.
-
-### 3.2 Import Models
-1. Copy the transfer package (*.zip) from Linux to Windows Bot_kilo directory
-2. Run:
-```cmd
-import_models.bat
-```
-
-### 3.3 Deploy Trading Bot
-```cmd
-deploy_trading.bat
-```
-Starts paper trading with imported models.
-
-## Quick Commands
-
-**Linux Training:**
-```bash
-# Full training workflow
-./setup_training_environment.sh
-./fetch_training_data.sh
+# Basic training (all models, all symbols)
 ./train_models.sh
 
-# Resume interrupted training
+# Resume from checkpoint (handles 6-hour limits)
 ./train_models.sh --resume
+
+# Custom training
+./train_models.sh --symbols BTCEUR,ETHEUR --models ppo,lightgbm
 ```
 
-**Windows Trading:**
-```cmd
-# Setup and deploy
-setup_environment.bat
-import_models.bat
-deploy_trading.bat
+## Memory Management & Crash Prevention
+
+**Important**: The system now includes automatic memory cleanup to prevent PC crashes during PPO training:
+
+- **Automatic Environment Cleanup**: PPO environments are properly closed after each model
+- **CUDA Memory Management**: GPU memory is cleared between training sessions
+- **Garbage Collection**: Forced cleanup after each model completion
+- **Checkpoint System**: Training state is saved every model completion
+
+## Checkpoint System
+
+The training system automatically saves progress and can resume from interruptions:
+
+- **Auto-save**: Progress saved after each model completion
+- **Resume**: Use `--resume` flag to continue from last checkpoint
+- **6-hour Limit Handling**: Automatically resumes on remote systems with time limits
+- **Graceful Shutdown**: Ctrl+C saves checkpoint before exit
+
+## Training Options
+
+```bash
+# Available flags
+--symbols BTCEUR,ETHEUR,LTCEUR    # Specific symbols
+--models ppo,lightgbm,gru         # Specific models  
+--resume                          # Resume from checkpoint
+--package-models                  # Create transfer bundle
+--experiment-name my_experiment   # Custom experiment name
 ```
+
+## Model Transfer
+
+After training, use the generated transfer bundle:
+
+1. Training creates `models/exports/transfer_bundle_YYYYMMDD_HHMMSS.zip`
+2. Copy to target machine
+3. Run the included `import_models.py` script
 
 ## Troubleshooting
 
-**Training stops unexpectedly:**
-1. Check terminal output for errors
-2. Resume: `./train_models.sh --resume`
-3. Check `checkpoints/` directory exists
+**PC Crashes During Training**: 
+- The new memory cleanup system prevents this
+- If crashes still occur, reduce batch sizes in `src/config/config.yaml`
 
-**Resume fails:**
-1. Verify checkpoint files in `checkpoints/`
-2. If corrupted, delete checkpoints and restart
-3. Check configuration hasn't changed
+**Training Interrupted**:
+- Use `./train_models.sh --resume` to continue
+- Check `checkpoints/` directory for saved progress
 
-**No data found:**
-1. Run data collection script first
-2. Verify `data/` directory has .csv files
-3. Check configuration files
-
-**Windows import fails:**
-1. Ensure transfer package (*.zip) is in Bot_kilo directory
-2. Run `validate_models.bat` after import
-3. Check `logs/` directory for errors
+**Out of Memory**:
+- Reduce `n_steps` and `batch_size` for PPO models
+- Close other applications during training
 
 ## File Structure
+
 ```
 Bot_kilo/
-├── data/                     # Market data (.csv files)
-├── models/exports/           # Packaged models for transfer
-├── checkpoints/              # Auto-saved training progress
-├── logs/                     # Application logs
-├── scripts/                  # Core Python scripts
-├── config/                   # Configuration files
-├── train_models.sh           # Linux training script
-├── fetch_training_data.sh    # Linux data collection
-├── setup_training_environment.sh # Linux environment setup
-├── setup_environment.bat     # Windows environment setup
-├── import_models.bat         # Windows model import
-└── deploy_trading.bat        # Windows trading deployment
+├── data/              # Market data databases
+├── models/            # Trained models
+├── checkpoints/       # Training progress saves
+├── logs/              # Training logs
+├── scripts/           # Training scripts
+└── src/               # Source code
 ```
 
-## Important Notes
+## Remote Training
 
-- **Never train on Windows computer** - Use Linux for training only
-- **Checkpoint system** prevents loss from 6-hour runtime limits
-- **Transfer packages** ensure easy model deployment
-- **Paper trading first** - Test before live trading
-- Training automatically saves progress every model completion
-- Use `--resume` to continue interrupted training sessions
+For training on remote machines with time limits:
+
+1. Start training: `./train_models.sh`
+2. When session ends, restart with: `./train_models.sh --resume`
+3. Repeat until all models complete
+4. Download the transfer bundle from `models/exports/`
+
+The checkpoint system ensures no progress is lost between sessions.
