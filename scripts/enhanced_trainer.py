@@ -543,7 +543,7 @@ def main() -> None:
             logger.info("Starting fresh training")
     else:
         # Clean up any existing checkpoints if not resuming
-        checkpoint_manager.cleanup_checkpoints()
+        checkpoint_manager.cleanup_checkpoint()
         logger.info("Starting fresh training (checkpoints cleared)")
 
     # CV splitter and metrics
