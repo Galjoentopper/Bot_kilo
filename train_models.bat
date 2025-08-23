@@ -9,6 +9,11 @@ REM Usage:
 REM   train_models.bat                    - Train all models with default settings
 REM   train_models.bat --symbols BTCEUR   - Train only BTCEUR models
 REM   train_models.bat --models lightgbm  - Train only LightGBM models
+REM
+REM Checkpoint Options (for 6-hour runtime limits):
+REM   train_models.bat --resume           - Resume from last checkpoint
+REM   train_models.bat --checkpoint-dir checkpoints\custom - Use custom checkpoint directory
+REM   train_models.bat --auto-checkpoint  - Enable automatic checkpointing (default: enabled)
 REM ============================================================================
 
 setlocal enabledelayedexpansion
@@ -49,6 +54,7 @@ REM Create necessary directories
 if not exist "models" mkdir models
 if not exist "models\exports" mkdir models\exports
 if not exist "mlruns" mkdir mlruns
+if not exist "checkpoints" mkdir checkpoints
 
 echo Checking Python dependencies...
 python -c "import numpy, pandas, yaml, lightgbm, torch" >nul 2>&1
@@ -66,10 +72,17 @@ if errorlevel 1 (
 echo.
 echo Starting enhanced model training...
 echo Training will include automatic model packaging for transfer
+echo Checkpoint system enabled - training can be resumed if interrupted
 echo.
 
-REM Run the enhanced trainer with packaging enabled
-python scripts\enhanced_trainer.py --package-models --create-transfer-bundle %*
+REM Check if this is a resume operation
+echo %* | findstr /C:"--resume" >nul
+if not errorlevel 1 (
+    echo Resuming training from checkpoint...
+)
+
+REM Run the enhanced trainer with packaging and checkpoint support enabled
+python scripts\enhanced_trainer.py --package-models --create-transfer-bundle --auto-checkpoint %*
 
 if errorlevel 1 (
     echo.
@@ -91,6 +104,8 @@ echo Next steps:
 echo 1. Copy the entire export folder to your trading computer
 echo 2. Run the import_models.py script on your trading computer
 echo 3. Start paper trading with deploy_trading.bat
+echo.
+echo Note: If training was interrupted, you can resume with: train_models.bat --resume
 echo.
 echo Press any key to open the exports folder...
 pause >nul

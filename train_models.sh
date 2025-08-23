@@ -9,6 +9,11 @@
 #   ./train_models.sh                    - Train all models with default settings
 #   ./train_models.sh --symbols BTCEUR   - Train only BTCEUR models
 #   ./train_models.sh --models lightgbm  - Train only LightGBM models
+#
+# Checkpoint Options (for 6-hour runtime limits):
+#   ./train_models.sh --resume           - Resume from last checkpoint
+#   ./train_models.sh --checkpoint-dir checkpoints/custom - Use custom checkpoint directory
+#   ./train_models.sh --auto-checkpoint  - Enable automatic checkpointing (default: enabled)
 # ============================================================================
 
 set -e  # Exit on any error
@@ -45,6 +50,7 @@ fi
 mkdir -p models
 mkdir -p models/exports
 mkdir -p mlruns
+mkdir -p checkpoints
 
 echo "Checking Python dependencies..."
 if ! python3 -c "import numpy, pandas, yaml, lightgbm, torch" &> /dev/null; then
@@ -60,10 +66,16 @@ fi
 echo
 echo "Starting enhanced model training..."
 echo "Training will include automatic model packaging for transfer to Windows"
+echo "Checkpoint system enabled - training can be resumed if interrupted"
 echo
 
-# Run the enhanced trainer with packaging enabled
-python3 scripts/enhanced_trainer.py --package-models --create-transfer-bundle "$@"
+# Check if this is a resume operation
+if [[ "$*" == *"--resume"* ]]; then
+    echo "Resuming training from checkpoint..."
+fi
+
+# Run the enhanced trainer with packaging and checkpoint support enabled
+python3 scripts/enhanced_trainer.py --package-models --create-transfer-bundle --auto-checkpoint "$@"
 
 if [ $? -ne 0 ]; then
     echo
@@ -84,6 +96,8 @@ echo "Next steps:"
 echo "1. Copy the entire export folder to your Windows trading computer"
 echo "2. Run the import_models.py script on your Windows trading computer"
 echo "3. Start paper trading with deploy_trading.bat"
+echo
+echo "Note: If training was interrupted, you can resume with: ./train_models.sh --resume"
 echo
 echo "Opening exports folder..."
 if command -v xdg-open &> /dev/null; then

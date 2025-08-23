@@ -17,6 +17,7 @@ import argparse
 import yaml
 import json
 import shutil
+import signal
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Any, Optional, List
@@ -47,6 +48,34 @@ from src.notifier.telegram import TelegramNotifier
 # Import our new model packaging utilities
 from src.utils.model_packaging import ModelPackager
 from src.utils.model_transfer import ModelTransferManager
+from src.utils.training_checkpoint import TrainingCheckpoint, TrainingProgress, CheckpointMetadata
+
+# Global variables for checkpoint management
+checkpoint_manager = None
+shutdown_requested = False
+current_progress = None
+
+def signal_handler(signum, frame):
+    """Handle shutdown signals gracefully"""
+    global shutdown_requested, checkpoint_manager, current_progress
+    
+    print("\n🛑 Shutdown signal received. Saving checkpoint...")
+    shutdown_requested = True
+    
+    if checkpoint_manager and current_progress:
+        try:
+            # Save current progress before shutdown
+            checkpoint_manager.save_checkpoint(
+                progress=current_progress,
+                config={},  # Will be updated with actual config during training
+                partial_results={}
+            )
+            print("✅ Checkpoint saved successfully. Training can be resumed later.")
+        except Exception as e:
+            print(f"❌ Failed to save checkpoint: {e}")
+    
+    print("Exiting gracefully...")
+    sys.exit(0)
 
 
 def load_config(config_path: str = "src/config/config.yaml") -> Dict[str, Any]:
@@ -357,6 +386,8 @@ def main() -> None:
     parser.add_argument('--seed', type=int, default=None)
     parser.add_argument('--experiment-name', type=str, default=None)
     parser.add_argument('--start-date', type=str, default=None)
+    parser.add_argument('--resume', action='store_true', help='Resume training from last checkpoint')
+    parser.add_argument('--checkpoint-dir', type=str, default='checkpoints', help='Directory for checkpoint files')
     parser.add_argument('--verbose', action='store_true')
 
     args = parser.parse_args()
@@ -471,6 +502,43 @@ def main() -> None:
     logger.info(f"Enhanced Trainer settings: interval={interval}, target={target_type}, splits={n_splits}, embargo={embargo}, fees={fee_bps}bps, slippage={slippage_bps}bps, turnover_lambda={turnover_lambda}, cache={cache}, objective={objective}, max_workers={max_workers}, start_date={start_date}")
     logger.info(f"Model packaging: enabled={args.package_models or args.create_transfer_bundle}")
 
+    # Initialize checkpoint system
+    global checkpoint_manager, shutdown_requested, current_progress
+    checkpoint_manager = TrainingCheckpoint(args.checkpoint_dir)
+    shutdown_requested = False
+    current_progress = TrainingProgress(
+        symbol_index=0,
+        model_index=0,
+        fold_index=0,
+        total_symbols=len(symbols_to_train),
+        total_models=len(model_list),
+        total_folds=n_splits,
+        completed_models=[],
+        partial_results={}
+    )
+    
+    # Set up signal handlers for graceful shutdown
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
+    # Check for existing checkpoint and resume if requested
+    if args.resume:
+        try:
+            checkpoint_data = checkpoint_manager.load_checkpoint()
+            if checkpoint_data:
+                current_progress = checkpoint_data['progress']
+                logger.info(f"Resuming from checkpoint: Symbol {current_progress.symbol_index+1}/{current_progress.total_symbols}, Model {current_progress.model_index+1}/{current_progress.total_models}")
+                logger.info(f"Completed models: {len(current_progress.completed_models)}")
+            else:
+                logger.info("No valid checkpoint found, starting fresh training")
+        except Exception as e:
+            logger.error(f"Failed to load checkpoint: {e}")
+            logger.info("Starting fresh training")
+    else:
+        # Clean up any existing checkpoints if not resuming
+        checkpoint_manager.cleanup_checkpoints()
+        logger.info("Starting fresh training (checkpoints cleared)")
+
     # CV splitter and metrics
     cv_splitter = PurgedTimeSeriesSplit(n_splits=n_splits, gap=embargo, embargo=embargo)
     metrics_calc = TradingMetrics(fee_bps=fee_bps, slippage_bps=slippage_bps)
@@ -498,8 +566,22 @@ def main() -> None:
 
     trained_models = []
     
-    # Main training loop (same as original trainer)
-    for symbol in symbols_to_train:
+    # Restore trained_models from checkpoint if resuming
+    if args.resume and current_progress.completed_models:
+        for model_key in current_progress.completed_models:
+            if '_' in model_key:
+                symbol, model_type = model_key.rsplit('_', 1)
+                trained_models.append((model_type, symbol))
+        logger.info(f"Restored {len(trained_models)} completed models from checkpoint")
+    
+    # Main training loop with checkpoint support
+    for symbol_idx, symbol in enumerate(symbols_to_train):
+        # Skip symbols that are already completed (resume logic)
+        if symbol_idx < current_progress.symbol_index:
+            logger.info(f"Skipping already completed symbol: {symbol}")
+            continue
+            
+        current_progress.symbol_index = symbol_idx
         logger.info(f"==== Training {symbol} ====")
         try:
             X, y, timestamps, feature_names, metadata = dataset_builder.build_dataset(
@@ -519,7 +601,40 @@ def main() -> None:
             logger.error(f"Dataset invalid for {symbol}: {errors}")
             continue
 
-        for model_type in model_list:
+        for model_idx, model_type in enumerate(model_list):
+            # Skip models that are already completed for this symbol (resume logic)
+            model_key = f"{symbol}_{model_type}"
+            if model_key in current_progress.completed_models:
+                logger.info(f"Skipping already completed model: {model_type} for {symbol}")
+                continue
+                
+            # Check for shutdown signal
+            if shutdown_requested:
+                logger.info("Shutdown requested, saving checkpoint and exiting...")
+                checkpoint_manager.save_checkpoint(
+                    progress=current_progress,
+                    config={
+                        'symbols': symbols_to_train,
+                        'models': model_list,
+                        'interval': interval,
+                        'target_type': target_type,
+                        'target_horizon': target_horizon,
+                        'n_splits': n_splits,
+                        'embargo': embargo,
+                        'fee_bps': fee_bps,
+                        'slippage_bps': slippage_bps,
+                        'turnover_lambda': turnover_lambda,
+                        'cache': cache,
+                        'objective': objective,
+                        'seed': seed,
+                        'start_date': start_date
+                    }
+                )
+                return
+                
+            current_progress.model_index = model_idx
+            logger.info(f"Training {model_type} for {symbol} (Progress: {len(current_progress.completed_models)}/{len(symbols_to_train) * len(model_list)} models completed)")
+            
             try:
                 task_type = 'classification' if target_type == 'direction' else 'regression'
                 adapter = create_model_adapter(model_type, config, task_type)
@@ -635,6 +750,40 @@ def main() -> None:
                 logger.info(f"Saved {model_type} artifacts to {saved_path}")
                 trained_models.append((model_type, symbol))
                 
+                # Update checkpoint progress
+                model_key = f"{symbol}_{model_type}"
+                current_progress.completed_models.append(model_key)
+                current_progress.partial_results[model_key] = {
+                    'saved_path': saved_path,
+                    'run_id': run_id,
+                    'timestamp': datetime.now().isoformat()
+                }
+                
+                # Save checkpoint after each model completion
+                try:
+                    checkpoint_manager.save_checkpoint(
+                        progress=current_progress,
+                        config={
+                            'symbols': symbols_to_train,
+                            'models': model_list,
+                            'interval': interval,
+                            'target_type': target_type,
+                            'target_horizon': target_horizon,
+                            'n_splits': n_splits,
+                            'embargo': embargo,
+                            'fee_bps': fee_bps,
+                            'slippage_bps': slippage_bps,
+                            'turnover_lambda': turnover_lambda,
+                            'cache': cache,
+                            'objective': objective,
+                            'seed': seed,
+                            'start_date': start_date
+                        }
+                    )
+                    logger.debug(f"Checkpoint saved after completing {model_type} for {symbol}")
+                except Exception as e:
+                    logger.error(f"Failed to save checkpoint: {e}")
+                
                 # Notify model completion
                 if notifier and getattr(notifier, 'enabled', False):
                     try:
@@ -693,6 +842,13 @@ def main() -> None:
                 except Exception:
                     pass
 
+    # Clean up checkpoints after successful completion
+    try:
+        checkpoint_manager.cleanup_checkpoint()
+        logger.info("Training completed successfully, checkpoints cleaned up")
+    except Exception as e:
+        logger.error(f"Failed to cleanup checkpoints: {e}")
+    
     # Notify completion
     if notifier and getattr(notifier, 'enabled', False):
         try:
