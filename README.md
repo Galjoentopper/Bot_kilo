@@ -1,140 +1,136 @@
-# Trading Bot - Model Training with Checkpoint System
+# Trading Bot - Complete Setup Guide
 
-## Quick Start
+This guide walks you through setting up the trading bot from GitHub cloning to running live trades.
 
-### For Linux Training Computer
+## Overview
+
+**Training Computer (Linux):** Powerful machine for model training  
+**Trading Computer (Windows):** Your regular computer for running the bot
+
+## Step 1: Clone Repository
+
 ```bash
-# Make script executable
-chmod +x train_models.sh
+git clone https://github.com/your-username/Bot_kilo.git
+cd Bot_kilo
+```
 
-# Start training (with automatic checkpointing)
+## Step 2: Linux Training Setup
+
+### 2.1 Environment Setup
+```bash
+./setup_training_environment.sh
+```
+This installs Python dependencies, creates directories, and sets up the training environment.
+
+### 2.2 Fetch Training Data
+```bash
+./fetch_training_data.sh
+```
+Collects historical market data for training.
+
+**Options:**
+- `./fetch_training_data.sh --symbol BTCEUR` - Fetch specific symbol
+- `./fetch_training_data.sh --update` - Update existing data
+
+### 2.3 Train Models
+```bash
 ./train_models.sh
+```
+
+**Training Options:**
+- `./train_models.sh --symbols BTCEUR` - Train specific symbol
+- `./train_models.sh --resume` - Resume from checkpoint
+- `./train_models.sh --checkpoint-dir /path/to/checkpoints` - Custom checkpoint location
+- `./train_models.sh --auto-checkpoint` - Enable auto-checkpointing
+
+**Important:** Training creates a transfer package in `models/exports/` for Windows.
+
+## Step 3: Windows Trading Setup
+
+### 3.1 Environment Setup
+```cmd
+setup_environment.bat
+```
+Installs Python dependencies and creates necessary directories.
+
+### 3.2 Import Models
+1. Copy the transfer package (*.zip) from Linux to Windows Bot_kilo directory
+2. Run:
+```cmd
+import_models.bat
+```
+
+### 3.3 Deploy Trading Bot
+```cmd
+deploy_trading.bat
+```
+Starts paper trading with imported models.
+
+## Quick Commands
+
+**Linux Training:**
+```bash
+# Full training workflow
+./setup_training_environment.sh
+./fetch_training_data.sh
+./train_models.sh --auto-checkpoint
 
 # Resume interrupted training
 ./train_models.sh --resume
 ```
 
-### For Windows Training Computer
+**Windows Trading:**
 ```cmd
-# Start training (with automatic checkpointing)
-train_models.bat
-
-# Resume interrupted training
-train_models.bat --resume
-```
-
-## Checkpoint System Features
-
-### Automatic Checkpointing
-- Training progress is automatically saved after each model completion
-- Handles 6-hour runtime limits gracefully
-- No training progress is lost during interruptions
-
-### Resume Training
-- Use `--resume` flag to continue from last checkpoint
-- Automatically detects and loads the most recent checkpoint
-- Skips already completed models and symbols
-
-### Custom Options
-```bash
-# Linux examples
-./train_models.sh --resume --checkpoint-dir custom_checkpoints
-./train_models.sh --symbols BTCEUR --models lightgbm
-./train_models.sh --auto-checkpoint --package-models
-
-# Windows examples
-train_models.bat --resume --checkpoint-dir custom_checkpoints
-train_models.bat --symbols BTCEUR --models lightgbm
-train_models.bat --auto-checkpoint --package-models
+# Setup and deploy
+setup_environment.bat
+import_models.bat
+deploy_trading.bat
 ```
 
 ## Troubleshooting
 
-### If Training Stops
-1. Check the terminal output for any error messages
-2. Resume with: `./train_models.sh --resume` (Linux) or `train_models.bat --resume` (Windows)
-3. Checkpoint files are saved in the `checkpoints/` directory
+**Training stops unexpectedly:**
+1. Check terminal output for errors
+2. Resume: `./train_models.sh --resume`
+3. Check `checkpoints/` directory exists
 
-### If Resume Fails
-1. Check if checkpoint files exist in `checkpoints/` directory
-2. Verify the checkpoint file is not corrupted
-3. Start fresh training if needed (checkpoints will be recreated)
+**Resume fails:**
+1. Verify checkpoint files in `checkpoints/`
+2. If corrupted, delete checkpoints and restart
+3. Check configuration hasn't changed
+
+**No data found:**
+1. Run data collection script first
+2. Verify `data/` directory has .csv files
+3. Check configuration files
+
+**Windows import fails:**
+1. Ensure transfer package (*.zip) is in Bot_kilo directory
+2. Run `validate_models.bat` after import
+3. Check `logs/` directory for errors
 
 ## File Structure
 ```
 Bot_kilo/
-├── checkpoints/          # Training checkpoint files
-├── models/exports/       # Packaged models for transfer
-├── train_models.sh       # Linux training script
-├── train_models.bat      # Windows training script
-└── scripts/enhanced_trainer.py  # Main training script
+├── data/                     # Market data (.csv files)
+├── models/exports/           # Packaged models for transfer
+├── checkpoints/              # Auto-saved training progress
+├── logs/                     # Application logs
+├── scripts/                  # Core Python scripts
+├── config/                   # Configuration files
+├── train_models.sh           # Linux training script
+├── fetch_training_data.sh    # Linux data collection
+├── setup_training_environment.sh # Linux environment setup
+├── setup_environment.bat     # Windows environment setup
+├── import_models.bat         # Windows model import
+└── deploy_trading.bat        # Windows trading deployment
 ```
 
-A robust checkpoint and resume system for handling 6-hour runtime limits on Linux systems.
+## Important Notes
 
-## Features
-
-- **Auto-save**: Automatically saves progress after each model completion
-- **Resume capability**: Continue training from where it left off after interruption
-- **Graceful shutdown**: Handles system signals to save state before shutdown
-- **Progress tracking**: Tracks symbol index, model index, and completed models
-- **Cleanup**: Automatically removes checkpoints after successful completion
-
-## Usage
-
-### Starting Fresh Training
-
-```bash
-python scripts/enhanced_trainer.py --config config/training_config.yaml
-```
-
-### Resuming from Checkpoint
-
-```bash
-python scripts/enhanced_trainer.py --config config/training_config.yaml --resume
-```
-
-### Custom Checkpoint Directory
-
-```bash
-python scripts/enhanced_trainer.py --config config/training_config.yaml --resume --checkpoint-dir /path/to/checkpoints
-```
-
-## How It Works
-
-1. **Checkpoint Creation**: After each model completes training, the system saves:
-   - Current progress (symbol/model indices)
-   - List of completed models
-   - Training configuration
-   - Partial results and metadata
-
-2. **Resume Detection**: On startup, the script checks for existing checkpoints
-   - If found with `--resume` flag, continues from last saved state
-   - If not found or no `--resume` flag, starts fresh training
-
-3. **Graceful Shutdown**: Signal handlers (SIGTERM, SIGINT) ensure:
-   - Current progress is saved before exit
-   - No data loss during interruption
-
-4. **Automatic Cleanup**: After successful completion:
-   - All checkpoint files are removed
-   - Only final trained models remain
-
-## Files Modified
-
-- `scripts/enhanced_trainer.py`: Main training script with checkpoint integration
-- `src/utils/training_checkpoint.py`: Checkpoint utility classes
-
-## Checkpoint Storage
-
-- Default location: `./checkpoints/`
-- Files: `checkpoint_latest.pkl` (binary format)
-- Contains: Progress state, config hash, completed models list
-
-## Error Handling
-
-- Invalid checkpoints are automatically detected and ignored
-- Configuration mismatches prevent resume (starts fresh)
-- Corrupted checkpoint files trigger fresh start with warning
-
-The system is designed to be robust and handle various failure scenarios while ensuring training can always continue from the last successful state.
+- **Never train on Windows computer** - Use Linux for training only
+- **Checkpoint system** prevents loss from 6-hour runtime limits
+- **Transfer packages** ensure easy model deployment
+- **Paper trading first** - Test before live trading
+- Training automatically saves progress every model completion
+- Use `--resume` to continue interrupted training sessions
