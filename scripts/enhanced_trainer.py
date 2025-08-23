@@ -133,107 +133,160 @@ def package_and_export_models(output_dir: str, symbols: List[str], models: List[
                              export_dir: Optional[str] = None) -> Dict[str, Any]:
     """
     Package trained models for easy transfer and deployment.
-    
-    Args:
-        output_dir: Directory containing trained models
-        symbols: List of symbols that were trained
-        models: List of model types that were trained
-        config: Configuration dictionary
-        logger: Logger instance
-        export_dir: Optional directory to export packaged models
-    
-    Returns:
-        Dictionary with packaging results
+    This implementation is compatible with the current ModelPackager and ModelTransfer utilities.
     """
     logger.info("Starting model packaging and export...")
-    
-    packager = ModelPackager()
-    transfer_manager = ModelTransferManager()
-    
+
+    # Ensure paths are normalized
+    output_dir = os.path.abspath(output_dir)
+    if export_dir is not None:
+        export_dir = os.path.abspath(export_dir)
+
+    packager = ModelPackager(base_dir=output_dir)
+
     packaging_results = {
         'packaged_models': [],
         'failed_models': [],
         'export_path': None,
         'transfer_ready': False
     }
-    
+
+    # Mapping of expected model file extensions per model type
+    ext_map: Dict[str, List[str]] = {
+        'gru': ['.pt', '.pth'],
+        'lightgbm': ['.pkl'],
+        'ppo': ['.zip']
+    }
+
+    def _find_model_file(model_type: str, symbol: str) -> Optional[str]:
+        """Locate the most recent model file for a given model type and symbol.
+        Searches in:
+        1) latest symlink or latest_pointer.txt under {output_dir}/{model_type}/{symbol}
+        2) models/metadata for best_wf_* files
+        3) recursive search under {output_dir}/{model_type}/{symbol}
+        """
+        model_root = os.path.join(output_dir, model_type, symbol)
+        candidates: List[Path] = []
+
+        # 1) latest directory or pointer
+        latest_path = os.path.join(model_root, 'latest')
+        latest_pointer_path = os.path.join(model_root, 'latest_pointer.txt')
+        actual_dir: Optional[str] = None
+
+        if os.path.exists(latest_path):
+            # Could be a symlink or a real folder
+            try:
+                if os.path.islink(latest_path):
+                    resolved = os.readlink(latest_path)
+                    if os.path.isdir(resolved):
+                        actual_dir = resolved
+                elif os.path.isdir(latest_path):
+                    actual_dir = latest_path
+            except OSError:
+                pass
+
+        if actual_dir is None and os.path.exists(latest_pointer_path):
+            try:
+                with open(latest_pointer_path, 'r') as f:
+                    pointer_target = f.read().strip()
+                if os.path.isdir(pointer_target):
+                    actual_dir = pointer_target
+                elif os.path.isfile(pointer_target):
+                    # Some trainers may store the file path directly
+                    candidates.append(Path(pointer_target))
+            except Exception:
+                pass
+
+        if actual_dir and os.path.isdir(actual_dir):
+            for ext in ext_map.get(model_type, ['.pkl', '.pt', '.zip']):
+                try:
+                    files = list(Path(actual_dir).rglob(f"*{ext}"))
+                    candidates.extend(files)
+                except Exception:
+                    pass
+
+        # 2) metadata directory best-of artifacts
+        metadata_dir = os.path.join(output_dir, 'metadata')
+        if os.path.isdir(metadata_dir):
+            for ext in ext_map.get(model_type, ['.pkl', '.pt', '.zip']):
+                try:
+                    files = list(Path(metadata_dir).glob(f"*{symbol}*{ext}"))
+                    candidates.extend(files)
+                except Exception:
+                    pass
+
+        # 3) Fallback recursive search under model_root
+        if os.path.isdir(model_root):
+            for ext in ext_map.get(model_type, ['.pkl', '.pt', '.zip']):
+                try:
+                    files = list(Path(model_root).rglob(f"*{ext}"))
+                    candidates.extend(files)
+                except Exception:
+                    pass
+
+        # Normalize and filter to files
+        candidates = [p for p in candidates if p.exists() and p.is_file()]
+        if not candidates:
+            return None
+        latest_file = max(candidates, key=lambda p: p.stat().st_mtime)
+        return str(latest_file)
+
     # Package individual models
     for symbol in symbols:
         for model_type in models:
-            model_path = os.path.join(output_dir, model_type, symbol)
-            
-            # Find the latest model directory
-            if os.path.exists(model_path):
-                # Look for latest symlink or latest_pointer.txt
-                latest_path = os.path.join(model_path, 'latest')
-                latest_pointer_path = os.path.join(model_path, 'latest_pointer.txt')
-                
-                actual_model_path = None
-                if os.path.exists(latest_path):
-                    if os.path.islink(latest_path):
-                        actual_model_path = os.readlink(latest_path)
-                    elif os.path.isdir(latest_path):
-                        actual_model_path = latest_path
-                elif os.path.exists(latest_pointer_path):
-                    with open(latest_pointer_path, 'r') as f:
-                        actual_model_path = f.read().strip()
-                
-                if actual_model_path and os.path.exists(actual_model_path):
-                    try:
-                        # Package the model
-                        package_info = packager.package_model(
-                            model_path=actual_model_path,
-                            model_type=model_type,
-                            symbol=symbol,
-                            config=config
-                        )
-                        
-                        packaging_results['packaged_models'].append({
-                            'symbol': symbol,
-                            'model_type': model_type,
-                            'package_path': package_info['package_path'],
-                            'metadata': package_info['metadata']
-                        })
-                        
-                        logger.info(f"Successfully packaged {model_type} model for {symbol}")
-                        
-                    except Exception as e:
-                        logger.error(f"Failed to package {model_type} model for {symbol}: {e}")
-                        packaging_results['failed_models'].append({
-                            'symbol': symbol,
-                            'model_type': model_type,
-                            'error': str(e)
-                        })
-                else:
-                    logger.warning(f"No trained model found for {model_type}/{symbol}")
-    
+            model_file = _find_model_file(model_type, symbol)
+            if model_file:
+                try:
+                    # Use training config for metadata consistency
+                    package_path = packager.package_model(
+                        model_path=model_file,
+                        model_type=model_type,
+                        symbol=symbol,
+                        training_config=config
+                    )
+
+                    packaging_results['packaged_models'].append({
+                        'symbol': symbol,
+                        'model_type': model_type,
+                        'package_path': package_path
+                    })
+                    logger.info(f"Successfully packaged {model_type} model for {symbol}")
+                except Exception as e:
+                    logger.error(f"Failed to package {model_type} model for {symbol}: {e}")
+                    packaging_results['failed_models'].append({
+                        'symbol': symbol,
+                        'model_type': model_type,
+                        'error': str(e)
+                    })
+            else:
+                logger.warning(f"No trained model found for {model_type}/{symbol}")
+
     # Create transfer bundle if we have packaged models
     if packaging_results['packaged_models']:
         try:
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            # Default export directory under models/exports
             if export_dir is None:
-                export_dir = os.path.join(output_dir, 'exports', datetime.now().strftime('%Y%m%d_%H%M%S'))
-            
+                export_dir = os.path.join(output_dir, 'exports')
             os.makedirs(export_dir, exist_ok=True)
-            
-            # Prepare models for transfer
-            transfer_info = transfer_manager.prepare_models_for_transfer(
-                model_packages=[pkg['package_path'] for pkg in packaging_results['packaged_models']],
-                destination_dir=export_dir,
-                include_config=True,
-                config_path="src/config/config.yaml"
+
+            bundle_path = os.path.join(export_dir, f"model_transfer_bundle_{timestamp}.zip")
+
+            # Create a bundle containing the packaged models and import script
+            packager.create_transfer_bundle(
+                model_types=models,
+                symbols=symbols,
+                output_path=bundle_path
             )
-            
-            packaging_results['export_path'] = export_dir
+
+            packaging_results['export_path'] = bundle_path
             packaging_results['transfer_ready'] = True
-            packaging_results['transfer_info'] = transfer_info
-            
-            logger.info(f"Models packaged and ready for transfer at: {export_dir}")
+            logger.info(f"Models packaged and ready for transfer at: {bundle_path}")
             logger.info(f"Transfer bundle includes: {len(packaging_results['packaged_models'])} models")
-            
         except Exception as e:
             logger.error(f"Failed to create transfer bundle: {e}")
             packaging_results['transfer_ready'] = False
-    
+
     return packaging_results
 
 
