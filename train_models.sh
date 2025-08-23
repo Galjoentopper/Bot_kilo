@@ -13,7 +13,6 @@
 # Checkpoint Options (for 6-hour runtime limits):
 #   ./train_models.sh --resume           - Resume from last checkpoint
 #   ./train_models.sh --checkpoint-dir checkpoints/custom - Use custom checkpoint directory
-#   ./train_models.sh --auto-checkpoint  - Enable automatic checkpointing (default: enabled)
 # ============================================================================
 
 set -e  # Exit on any error
@@ -75,7 +74,7 @@ if [[ "$*" == *"--resume"* ]]; then
 fi
 
 # Run the enhanced trainer with packaging and checkpoint support enabled
-python3 scripts/enhanced_trainer.py --package-models --create-transfer-bundle --auto-checkpoint "$@"
+python3 scripts/enhanced_trainer.py --package-models --create-transfer-bundle "$@"
 
 if [ $? -ne 0 ]; then
     echo
