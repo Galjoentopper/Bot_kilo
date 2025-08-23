@@ -16,8 +16,15 @@ import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Any, Optional, List
-import numpy as np
 import logging
+
+# Critical dependencies with error handling
+try:
+    import numpy as np
+except ImportError as e:
+    print(f"Error: NumPy is required but not installed: {e}")
+    print("Please install numpy: pip install numpy")
+    sys.exit(1)
 
 # Add project root to Python path
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -26,6 +33,7 @@ sys.path.insert(0, project_root)
 from src.utils.logger import setup_logging, TradingBotLogger
 from src.utils.mlflow_init import initialize_mlflow_from_config
 from src.data_pipeline.dataset_builder import DatasetBuilder
+from src.data_pipeline.loader import DataLoader
 from src.utils.cross_validation import PurgedTimeSeriesSplit
 from src.utils.metrics import TradingMetrics, optimize_threshold
 from src.utils.calibration import ProbabilityCalibrator
@@ -44,23 +52,16 @@ def load_config(config_path: str = "src/config/config.yaml") -> Dict[str, Any]:
 
 def _make_jsonable(value: Any) -> Any:
     """Convert common non-JSON-serializable types into JSON-safe structures."""
-    try:
-        import numpy as _np  # local alias to avoid shadowing
-        from datetime import datetime as _dt
-    except Exception:
-        _np = None
-        _dt = None
-
     # Scalars
-    if _np is not None and isinstance(value, _np.generic):
+    if hasattr(np, 'generic') and isinstance(value, np.generic):
         return value.item()
     if isinstance(value, (int, float, str, bool)) or value is None:
         return value
     # Datetime
-    if _dt is not None and isinstance(value, _dt):
+    if isinstance(value, datetime):
         return value.isoformat()
     # Numpy arrays
-    if _np is not None and isinstance(value, _np.ndarray):
+    if hasattr(np, 'ndarray') and isinstance(value, np.ndarray):
         # Be cautious with huge arrays; convert to list
         return value.tolist()
     # Lists / tuples
@@ -97,7 +98,6 @@ def main() -> None:
             # Load default config
             config = load_config('src/config/config.yaml')
             # Import early so names are bound before use
-            from src.data_pipeline.loader import DataLoader  # type: ignore
             from scripts.walk_forward_optuna import run_walk_forward_optuna  # type: ignore
             logger = setup_logging(config)
 
@@ -147,9 +147,8 @@ def main() -> None:
                     logger.error(f"Dataset invalid for {symbol}: {errors}")
                     continue
                 # Convert to arrays
-                import numpy as _np
-                X_arr = X.values if hasattr(X, 'values') else _np.asarray(X)
-                y_arr = _np.asarray(y)
+                X_arr = X.values if hasattr(X, 'values') else np.asarray(X)
+                y_arr = np.asarray(y)
                 save_best = os.path.join('models', 'metadata', f'best_wf_lightgbm_{symbol}.pkl')
                 res = run_walk_forward_optuna(
                     model='lightgbm',
@@ -243,7 +242,6 @@ def main() -> None:
         config=config
     )
 
-    from src.data_pipeline.loader import DataLoader
     data_loader = DataLoader(args.data_dir)
     availability = data_loader.check_data_availability()
     available_symbols = [s for s, ok in availability.items() if ok]
