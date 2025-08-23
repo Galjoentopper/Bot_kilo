@@ -515,14 +515,13 @@ def main() -> None:
     checkpoint_manager = TrainingCheckpoint(args.checkpoint_dir)
     shutdown_requested = False
     current_progress = TrainingProgress(
-        symbol_index=0,
-        model_index=0,
-        fold_index=0,
+        current_symbol_index=0,
+        current_model_index=0,
+        current_fold_index=0,
         total_symbols=len(symbols_to_train),
         total_models=len(model_list),
         total_folds=n_splits,
-        completed_models=[],
-        partial_results={}
+        completed_models=[]
     )
     
     # Set up signal handlers for graceful shutdown
@@ -535,7 +534,7 @@ def main() -> None:
             checkpoint_data = checkpoint_manager.load_checkpoint()
             if checkpoint_data:
                 current_progress = checkpoint_data['progress']
-                logger.info(f"Resuming from checkpoint: Symbol {current_progress.symbol_index+1}/{current_progress.total_symbols}, Model {current_progress.model_index+1}/{current_progress.total_models}")
+                logger.info(f"Resuming from checkpoint: Symbol {current_progress.current_symbol_index+1}/{current_progress.total_symbols}, Model {current_progress.current_model_index+1}/{current_progress.total_models}")
                 logger.info(f"Completed models: {len(current_progress.completed_models)}")
             else:
                 logger.info("No valid checkpoint found, starting fresh training")
@@ -578,11 +577,11 @@ def main() -> None:
     # Main training loop with checkpoint support
     for symbol_idx, symbol in enumerate(symbols_to_train):
         # Skip symbols that are already completed (resume logic)
-        if symbol_idx < current_progress.symbol_index:
+        if symbol_idx < current_progress.current_symbol_index:
             logger.info(f"Skipping already completed symbol: {symbol}")
             continue
             
-        current_progress.symbol_index = symbol_idx
+        current_progress.current_symbol_index = symbol_idx
         logger.info(f"==== Training {symbol} ====")
         try:
             X, y, timestamps, feature_names, metadata = dataset_builder.build_dataset(
@@ -633,7 +632,7 @@ def main() -> None:
                 )
                 return
                 
-            current_progress.model_index = model_idx
+            current_progress.current_model_index = model_idx
             logger.info(f"Training {model_type} for {symbol} (Progress: {len(current_progress.completed_models)}/{len(symbols_to_train) * len(model_list)} models completed)")
             
             try:
