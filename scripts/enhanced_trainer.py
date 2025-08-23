@@ -718,17 +718,6 @@ def main() -> None:
                         valid_idx=val_idx_final,
                         experiment_name=f"{args.experiment_name}_{symbol}_{model_type}_final"
                     )
-                    
-                    # Clean up PPO trainer to prevent memory leaks and PC crashes
-                    try:
-                        if hasattr(final_adapter, 'trainer') and hasattr(final_adapter.trainer, 'cleanup'):
-                            final_adapter.trainer.cleanup()
-                            logger.info(f"PPO trainer cleanup completed for {symbol}")
-                        elif hasattr(final_adapter, 'cleanup'):
-                            final_adapter.cleanup()
-                            logger.info(f"PPO adapter cleanup completed for {symbol}")
-                    except Exception as e:
-                        logger.warning(f"PPO cleanup failed for {symbol}: {e}")
                 else:
                     final_results = final_adapter.fit(
                         X=X,
@@ -771,6 +760,18 @@ def main() -> None:
 
                 logger.info(f"Saved {model_type} artifacts to {saved_path}")
                 trained_models.append((model_type, symbol))
+                
+                # Clean up PPO trainer after saving to prevent memory leaks and PC crashes
+                if model_type == 'ppo':
+                    try:
+                        if hasattr(final_adapter, 'trainer') and hasattr(final_adapter.trainer, 'cleanup'):
+                            final_adapter.trainer.cleanup()
+                            logger.info(f"PPO trainer cleanup completed for {symbol}")
+                        elif hasattr(final_adapter, 'cleanup'):
+                            final_adapter.cleanup()
+                            logger.info(f"PPO adapter cleanup completed for {symbol}")
+                    except Exception as e:
+                        logger.warning(f"PPO cleanup failed for {symbol}: {e}")
                 
                 # Update checkpoint progress
                 model_key = f"{symbol}_{model_type}"
