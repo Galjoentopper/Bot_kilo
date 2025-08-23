@@ -224,7 +224,9 @@ class BaseModelAdapter(ABC):
             # On Windows or if symlink fails, create a text file with the path
             logger.warning(f"Symlink creation failed, creating pointer file instead: {e}")
             try:
-                with open(symlink_path + '_pointer.txt', 'w') as f:
+                # Create pointer file in the parent directory with the expected name
+                pointer_path = os.path.join(os.path.dirname(symlink_path), 'latest_pointer.txt')
+                with open(pointer_path, 'w') as f:
                     f.write(target_dir)
             except Exception as e2:
                 logger.warning(f"Failed to create pointer file: {e2}")
