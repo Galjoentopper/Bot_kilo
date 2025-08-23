@@ -42,14 +42,27 @@ chmod +x scripts/train_models.sh
 ./scripts/setup_training_environment.sh
 ```
 
-#### Step 2: Prepare Your Data
+#### Step 2: Collect Training Data (Automated)
 ```bash
-# Create data directory structure
-mkdir -p data
+# Make data collection script executable
+chmod +x scripts/fetch_training_data.sh
 
-# Place your trading data files in the data directory
-# Supported formats: CSV files with OHLCV data
-# Example: data/BTCUSDT.csv, data/ETHUSDT.csv
+# Run automated data collection
+./scripts/fetch_training_data.sh
+
+# This will:
+# - Read symbols from config/config_training.yaml
+# - Create data/ directory structure
+# - Download bulk historical data (faster)
+# - Fill gaps with API calls
+# - Create SQLite databases for training
+```
+
+**Manual Data Preparation (Alternative)**
+```bash
+# If you prefer manual data setup:
+mkdir -p data
+# Place your CSV files: data/BTCUSDT.csv, data/ETHUSDT.csv
 ```
 
 #### Step 3: Configure Training Settings
@@ -134,7 +147,8 @@ Bot_kilo/
 ├── scripts/
 │   ├── Linux Scripts:
 │   │   ├── setup_training_environment.sh
-│   │   └── train_models.sh
+│   │   ├── train_models.sh
+│   │   └── fetch_training_data.sh
 │   ├── Windows Scripts:
 │   │   ├── import_models.bat
 │   │   ├── validate_models.bat
@@ -152,7 +166,7 @@ Bot_kilo/
 
 ### Training Phase (Linux)
 1. **Setup**: Run `setup_training_environment.sh`
-2. **Data**: Place CSV files in `data/` directory
+2. **Data**: Run `fetch_training_data.sh` (reads symbols from config)
 3. **Train**: Execute `train_models.sh`
 4. **Package**: Transfer package is automatically created
 5. **Transfer**: Copy `.zip` file to Windows machine
