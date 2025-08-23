@@ -76,7 +76,7 @@ check_dependencies() {
     
     # Install Python dependencies
     log_info "Installing Python dependencies..."
-    pip3 install --user pandas requests pyyaml || {
+    pip3 install pandas requests pyyaml || {
         log_error "Failed to install Python dependencies"
         exit 1
     }
