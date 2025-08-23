@@ -144,9 +144,9 @@ ehthumbs.db
 Thumbs.db
 
 # Project specific
-*.db
-*.sqlite
-*.sqlite3
+#*.db
+#*.sqlite
+#*.sqlite3
 #logs/
 temp/
 tmp/
@@ -162,7 +162,7 @@ tmp/
 *.egg-info/
 
 # Environment variables
-.env
+#.env
 
 # Data files (uncomment if you want to exclude data files)
 # data/*.csv
