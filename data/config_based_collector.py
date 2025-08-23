@@ -158,14 +158,30 @@ class ConfigBasedCollector:
     def validate_symbol(self, symbol: str) -> bool:
         """Validate that symbol exists on Binance"""
         try:
+            logger.info(f"[DEBUG] Validating symbol: {symbol}")
             response = requests.get(f"{self.base_url}/exchangeInfo", timeout=10)
+            logger.info(f"[DEBUG] API response status: {response.status_code}")
+            
             if response.status_code == 200:
                 data = response.json()
                 symbols = [s['symbol'] for s in data.get('symbols', [])]
-                return symbol in symbols
-            return False
+                logger.info(f"[DEBUG] Total symbols from API: {len(symbols)}")
+                
+                is_valid = symbol in symbols
+                logger.info(f"[DEBUG] Symbol {symbol} validation result: {is_valid}")
+                
+                if not is_valid:
+                    # Show similar symbols for debugging
+                    similar = [s for s in symbols if symbol.lower() in s.lower() or s.lower() in symbol.lower()]
+                    logger.info(f"[DEBUG] Similar symbols found: {similar[:10]}")
+                
+                return is_valid
+            else:
+                logger.error(f"[ERROR] API returned status {response.status_code}: {response.text}")
+                return False
         except Exception as e:
-            logger.warning(f"Could not validate {symbol}: {e}")
+            logger.error(f"[ERROR] Could not validate {symbol}: {e}")
+            logger.info(f"[DEBUG] Assuming symbol {symbol} is valid due to validation error")
             return True  # Assume valid if validation fails
     
     def download_bulk_data(self, symbol: str, year: int, month: int) -> Optional[pd.DataFrame]:
