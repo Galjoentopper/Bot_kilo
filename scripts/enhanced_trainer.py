@@ -531,9 +531,9 @@ def main() -> None:
     # Check for existing checkpoint and resume if requested
     if args.resume:
         try:
-            checkpoint_data = checkpoint_manager.load_checkpoint()
-            if checkpoint_data:
-                current_progress = checkpoint_data['progress']
+            progress, config, partial_results = checkpoint_manager.load_checkpoint()
+            if progress:
+                current_progress = progress
                 logger.info(f"Resuming from checkpoint: Symbol {current_progress.current_symbol_index+1}/{current_progress.total_symbols}, Model {current_progress.current_model_index+1}/{current_progress.total_models}")
                 logger.info(f"Completed models: {len(current_progress.completed_models)}")
             else:
