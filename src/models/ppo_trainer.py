@@ -307,11 +307,9 @@ class PPOTrainer:
         # in a way that's picklable with different but deterministic seeds
         def make_env_fn(data, kwargs, env_id):
             def _init(*args, **env_kwargs):
-                # Create environment without seed parameter
+                # Remove passing 'seed' into constructor; handle seeding via VecEnv.reset
                 env = TradingEnvironment(data, **kwargs)
                 env = Monitor(env)
-                # Set seed through reset method
-                env.seed(env_seed + env_id)  # Different seed per env
                 return env
             return _init
         
@@ -331,11 +329,20 @@ class PPOTrainer:
                     clip_obs=10.0,
                     clip_reward=10.0,
                 )
-                # Set seed for the VecNormalize wrapper
-                self.env.seed(env_seed)
-                logger.info(f"Applied VecNormalize wrapper with seed {env_seed}")
+                # In gymnasium, set seeds via reset(seed=...)
+                try:
+                    self.env.reset(seed=env_seed)
+                    logger.info(f"Applied VecNormalize wrapper and set seed {env_seed}")
+                except Exception:
+                    pass
             except Exception:
                 pass
+        # Ensure seeding even if VecNormalize not applied
+        try:
+            self.env.reset(seed=env_seed)
+            logger.info(f"Set vector environment seed {env_seed}")
+        except Exception:
+            pass
         
         # Create evaluation environment if eval data provided
         if eval_data is not None:
@@ -344,17 +351,13 @@ class PPOTrainer:
                 env = Monitor(env)
                 return env
             
-            # For evaluation, we typically use a single environment with consistent seed
-            def make_eval_env_with_seed():
-                # Create environment without seed parameter
-                env = TradingEnvironment(eval_data, **default_kwargs)
-                env = Monitor(env)
-                # Set seed through reset method
-                env.seed(env_seed + 1000)  # Different seed for eval
-                return env
-            
-            self.eval_env = DummyVecEnv([make_eval_env_with_seed])
-            logger.info(f"Created evaluation environment with seed {env_seed + 1000}")
+            # Use a single evaluation env; seed via reset rather than constructor
+            self.eval_env = DummyVecEnv([make_eval_env])
+            try:
+                self.eval_env.reset(seed=env_seed + 1000)
+                logger.info(f"Created evaluation environment with seed {env_seed + 1000}")
+            except Exception:
+                logger.info("Created evaluation environment")
             # Wrap eval with VecNormalize (in eval mode) and load stats if available
             if SB3_AVAILABLE:
                 try:
