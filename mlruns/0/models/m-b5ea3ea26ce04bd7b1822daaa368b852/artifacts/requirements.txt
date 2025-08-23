@@ -1,0 +1,16 @@
+mlflow==3.3.1
+bot-kilo==1.0.0
+cloudpickle==3.1.1
+cryptography==45.0.6
+defusedxml==0.7.1
+ipywidgets==8.1.7
+matplotlib==3.10.5
+numpy==1.26.4
+opencv-python==4.11.0.86
+pandas==2.3.2
+pyarrow==21.0.0
+rich==14.1.0
+scikit-learn==1.7.1
+scipy==1.16.1
+tensorboard==2.20.0
+torch==2.8.0
