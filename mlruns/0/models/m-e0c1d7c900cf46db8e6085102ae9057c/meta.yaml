@@ -1,0 +1,10 @@
+artifact_location: file:///notebooks/Bot_kilo/mlruns/0/models/m-e0c1d7c900cf46db8e6085102ae9057c/artifacts
+creation_timestamp: 1755454935675
+experiment_id: '0'
+last_updated_timestamp: 1755454940554
+model_id: m-e0c1d7c900cf46db8e6085102ae9057c
+model_type: null
+name: gru_model
+source_run_id: acfb180bfa064fb59170d19e172ca8df
+status: 2
+status_message: null

@@ -1,0 +1,23 @@
+artifact_path: file:///notebooks/Bot_kilo/mlruns/0/models/m-befca28ca1794d02b077730b9ee23af4/artifacts
+flavors:
+  python_function:
+    config:
+      device: null
+    data: data
+    env:
+      conda: conda.yaml
+      virtualenv: python_env.yaml
+    loader_module: mlflow.pytorch
+    pickle_module_name: mlflow.pytorch.pickle_module
+    python_version: 3.11.7
+  pytorch:
+    code: null
+    model_data: data
+    pytorch_version: 2.8.0+cu128
+mlflow_version: 3.2.0
+model_id: m-befca28ca1794d02b077730b9ee23af4
+model_size_bytes: 1209055
+model_uuid: m-befca28ca1794d02b077730b9ee23af4
+prompts: null
+run_id: 69472346b1c94e419e83e49aa548abc9
+utc_time_created: '2025-08-17 21:04:14.067184'

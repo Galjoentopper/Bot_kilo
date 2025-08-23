@@ -1,0 +1,14 @@
+artifact_uri: file:///notebooks/Bot_kilo/mlruns/0/4b6e30a23c7244229513c7df7a4cd271/artifacts
+end_time: 1755463255356
+entry_point_name: ''
+experiment_id: '0'
+lifecycle_stage: active
+run_id: 4b6e30a23c7244229513c7df7a4cd271
+run_name: gru_20250817_203926
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1755463166497
+status: 3
+tags: []
+user_id: root

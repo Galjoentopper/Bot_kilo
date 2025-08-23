@@ -1,0 +1,21 @@
+artifact_path: file:///notebooks/Bot_kilo/mlruns/0/models/m-1d37dff06fef4bf8a97eda153d4aa369/artifacts
+flavors:
+  lightgbm:
+    code: null
+    data: model.pkl
+    lgb_version: 4.6.0
+    model_class: lightgbm.sklearn.LGBMRegressor
+  python_function:
+    data: model.pkl
+    env:
+      conda: conda.yaml
+      virtualenv: python_env.yaml
+    loader_module: mlflow.lightgbm
+    python_version: 3.11.7
+mlflow_version: 3.2.0
+model_id: m-1d37dff06fef4bf8a97eda153d4aa369
+model_size_bytes: 9938
+model_uuid: m-1d37dff06fef4bf8a97eda153d4aa369
+prompts: null
+run_id: 9b9b3f1e42ad46cb91ca05242b8618f3
+utc_time_created: '2025-08-17 21:22:44.800531'

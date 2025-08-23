@@ -1,0 +1,10 @@
+artifact_location: file:///notebooks/Bot_kilo/mlruns/0/models/m-61d271daec374512bf813d63217de6d5/artifacts
+creation_timestamp: 1755454396240
+experiment_id: '0'
+last_updated_timestamp: 1755454398519
+model_id: m-61d271daec374512bf813d63217de6d5
+model_type: null
+name: lightgbm_model
+source_run_id: 1bb3feb178df40e68ecba512c41f9d95
+status: 2
+status_message: null

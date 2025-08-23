@@ -1,0 +1,14 @@
+artifact_uri: file:///notebooks/Bot_kilo/mlruns/0/d904f99128a44d56b4d12384d73a5429/artifacts
+end_time: 1755454367409
+entry_point_name: ''
+experiment_id: '0'
+lifecycle_stage: active
+run_id: d904f99128a44d56b4d12384d73a5429
+run_name: lgbm_20250817_181240
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1755454360441
+status: 3
+tags: []
+user_id: root
