@@ -1,27 +1,27 @@
 {
   "BTCEUR": {
     "last_bulk_month": "2024-12",
-    "last_api_timestamp": 1755943200000,
-    "total_records": 6606
+    "last_api_timestamp": 1755946800000,
+    "total_records": 6608
   },
   "ETHEUR": {
     "last_bulk_month": "2024-12",
-    "last_api_timestamp": 1755943200000,
-    "total_records": 6606
+    "last_api_timestamp": 1755946800000,
+    "total_records": 6608
   },
   "ADAEUR": {
     "last_bulk_month": "2024-12",
-    "last_api_timestamp": 1755943200000,
-    "total_records": 6606
+    "last_api_timestamp": 1755946800000,
+    "total_records": 6608
   },
   "DOTEUR": {
     "last_bulk_month": "2024-12",
-    "last_api_timestamp": 1755943200000,
-    "total_records": 6606
+    "last_api_timestamp": 1755946800000,
+    "total_records": 6608
   },
   "LINKEUR": {
     "last_bulk_month": "2024-12",
-    "last_api_timestamp": 1755943200000,
-    "total_records": 6606
+    "last_api_timestamp": 1755946800000,
+    "total_records": 6608
   }
 }
