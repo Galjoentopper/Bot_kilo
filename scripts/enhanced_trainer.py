@@ -753,11 +753,6 @@ def main() -> None:
                 # Update checkpoint progress
                 model_key = f"{symbol}_{model_type}"
                 current_progress.completed_models.append(model_key)
-                current_progress.partial_results[model_key] = {
-                    'saved_path': saved_path,
-                    'run_id': run_id,
-                    'timestamp': datetime.now().isoformat()
-                }
                 
                 # Save checkpoint after each model completion
                 try:
