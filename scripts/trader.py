@@ -1328,7 +1328,7 @@ class UnifiedPaperTrader:
 
     def _interval_to_seconds(self, interval: Optional[str] = None) -> int:
         """Convert timeframe string to seconds (e.g., '15m' -> 900). Defaults to self.interval."""
-        tf = (interval or self.interval or '15m').strip().lower()
+        tf = (interval or self.interval or '30m').strip().lower()
         try:
             unit = tf[-1]
             value = int(tf[:-1])

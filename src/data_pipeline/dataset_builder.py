@@ -59,7 +59,7 @@ class DatasetBuilder:
     def build_dataset(
         self,
         symbol: str,
-        interval: str = "15m",
+        interval: str = "30m",
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
         use_cache: bool = True,

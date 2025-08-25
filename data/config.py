@@ -59,7 +59,7 @@ class CollectorConfig:
         symbols = [s.strip().upper() for s in symbols_str.split(',')]
         
         # Parse intervals from comma-separated string
-        intervals_str = os.getenv('INTERVALS', '15m')
+        intervals_str = os.getenv('INTERVALS', '30m')
         intervals = [i.strip() for i in intervals_str.split(',')]
         
         return cls(

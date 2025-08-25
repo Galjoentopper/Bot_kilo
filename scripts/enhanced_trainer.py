@@ -320,7 +320,7 @@ def main() -> None:
                 return
             interval = (
                 trainer_cfg.get('interval')
-                or (config.get('data', {}) or {}).get('interval', '15m')
+                or (config.get('data', {}) or {}).get('interval', '30m')
             )
             target_type = trainer_cfg.get('target_type', 'return')
             target_horizon = int(trainer_cfg.get('default_target_horizon', 1))
@@ -499,7 +499,7 @@ def main() -> None:
     interval = (
         args.interval
         or trainer_cfg.get('interval')
-        or (config.get('data', {}) or {}).get('interval', '15m')
+        or (config.get('data', {}) or {}).get('interval', '30m')
     )
     target_type = args.target_type or trainer_cfg.get('target_type', 'return')
     target_horizon = args.target_horizon if args.target_horizon is not None else int(trainer_cfg.get('default_target_horizon', 1))

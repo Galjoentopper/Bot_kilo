@@ -59,7 +59,7 @@ class FinancialMLConstraints:
     # Financial data constraints
     max_lookback_days: int = 252                # 1 year maximum lookback
     min_prediction_horizon: int = 1             # Minimum 1 period ahead
-    max_prediction_horizon: int = 48            # Maximum 48 periods (12 hours for 15min data)
+    max_prediction_horizon: int = 24            # Maximum 24 periods (12 hours for 30min data)
     
     # Overfitting prevention
     max_feature_count: int = 200                # Maximum number of features

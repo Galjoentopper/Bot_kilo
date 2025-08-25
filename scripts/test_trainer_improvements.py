@@ -38,7 +38,7 @@ def create_test_data(n_samples: int = 1000, n_features: int = 10) -> pd.DataFram
     dates = pd.date_range(
         start=datetime.now() - timedelta(days=30),
         periods=n_samples,
-        freq='15min'
+        freq='30min'
     )
     
     # Create OHLCV data
@@ -78,7 +78,7 @@ def test_dataset_builder():
         
         # Save as SQLite database (expected format)
         import sqlite3
-        db_path = os.path.join(data_dir, f"{symbol.lower()}_15m.db")
+        db_path = os.path.join(data_dir, f"{symbol.lower()}_30m.db")
         conn = sqlite3.connect(db_path)
         
         # Reset index to have timestamp column
@@ -100,7 +100,7 @@ def test_dataset_builder():
         # Test building dataset
         X, y, timestamps, feature_names, metadata = builder.build_dataset(
             symbol=symbol,
-            interval='15m',
+            interval='30m',
             use_cache=True,
             target_type='return',
             target_horizon=1
@@ -330,7 +330,7 @@ def test_integration():
         
         # Save as SQLite database (expected format)
         import sqlite3
-        db_path = os.path.join(data_dir, f"{symbol.lower()}_15m.db")
+        db_path = os.path.join(data_dir, f"{symbol.lower()}_30m.db")
         conn = sqlite3.connect(db_path)
         
         # Reset index to have timestamp column

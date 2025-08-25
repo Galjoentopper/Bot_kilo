@@ -372,7 +372,7 @@ class DataLoader:
     
     def _interval_to_timedelta(self, interval: Optional[str] = None) -> pd.Timedelta:
         """Convert interval string like '15m' or '1h' to pandas Timedelta."""
-        iv = (interval or self.interval or '15m').strip().lower()
+        iv = (interval or self.interval or '30m').strip().lower()
         try:
             if iv.endswith('m'):
                 return pd.Timedelta(minutes=int(iv[:-1]))
@@ -386,7 +386,7 @@ class DataLoader:
     
     def _interval_to_rule(self, interval: Optional[str] = None) -> Optional[str]:
         """Convert interval like '15m'/'30m'/'1h' to pandas resample rule ('15T','30T','1H')."""
-        iv = (interval or self.interval or '15m').strip().lower()
+        iv = (interval or self.interval or '30m').strip().lower()
         try:
             if iv.endswith('m'):
                 return f"{int(iv[:-1])}T"
