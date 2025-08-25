@@ -291,8 +291,11 @@ class DatasetBuilder:
         
         # Check feature variance
         low_variance_features = []
-        for col in X.select_dtypes(include=[np.number]).columns:
-            if X[col].std() < 1e-10:
+        numeric_cols = X.select_dtypes(include=[np.number]).columns
+        
+        for col in numeric_cols:
+            col_std = X[col].std()
+            if col_std < 1e-6:
                 low_variance_features.append(col)
         
         if low_variance_features:

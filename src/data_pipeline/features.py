@@ -579,12 +579,12 @@ class FeatureEngine:
     
     def get_feature_names(self, df: pd.DataFrame) -> List[str]:
         """Get list of all feature column names."""
-        # Original OHLCV columns
-        original_cols = ['open', 'high', 'low', 'close', 'volume', 'quote_volume', 
-                        'trades', 'taker_buy_base', 'taker_buy_quote']
+        # Original OHLCV columns and non-feature columns to exclude
+        excluded_cols = ['open', 'high', 'low', 'close', 'volume', 'quote_volume', 
+                        'trades', 'taker_buy_base', 'taker_buy_quote', 'id', 'timestamp', 'target']
         
         # Return only the engineered features
-        feature_cols = [col for col in df.columns if col not in original_cols]
+        feature_cols = [col for col in df.columns if col not in excluded_cols]
         return feature_cols
     
     def prepare_model_input(self, df: pd.DataFrame, sequence_length: int = 20) -> Tuple[np.ndarray, List[str]]:
