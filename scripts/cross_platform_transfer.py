@@ -98,6 +98,9 @@ class CrossPlatformTransfer:
             # Add manifest
             zipf.writestr('transfer_manifest.json', json.dumps(manifest, indent=2))
             
+            # Track added files to avoid duplicates
+            added_files = set()
+            
             # Add models
             for model_info in models_info['models']:
                 model_path = Path(model_info['full_path'])
@@ -108,19 +111,95 @@ class CrossPlatformTransfer:
                             if file_path.is_file():
                                 # Create archive path relative to models root
                                 archive_path = 'models' / file_path.relative_to(source_path)
-                                zipf.write(file_path, archive_path)
+                                archive_path_str = str(archive_path).replace('\\', '/')
+                                if archive_path_str not in added_files:
+                                    zipf.write(file_path, archive_path)
+                                    added_files.add(archive_path_str)
                     else:
                         # Single file
                         archive_path = 'models' / model_path.relative_to(source_path)
-                        zipf.write(model_path, archive_path)
+                        archive_path_str = str(archive_path).replace('\\', '/')
+                        if archive_path_str not in added_files:
+                            zipf.write(model_path, archive_path)
+                            added_files.add(archive_path_str)
             
-            # Add metadata files if requested
+            # Add metadata files if requested (only standalone ones not already included)
             if include_metadata and models_info['metadata']:
                 for metadata_file in models_info['metadata']:
                     metadata_path = Path(metadata_file['full_path'])
                     if metadata_path.exists():
-                        archive_path = 'metadata' / metadata_path.name
-                        zipf.write(metadata_path, archive_path)
+                        # Check if this is a standalone metadata file (not embedded in model directories)
+                        relative_path = Path(metadata_file['path'])
+                        if str(relative_path).count('/') <= 1 and str(relative_path).count('\\') <= 1:
+                            # This is a standalone metadata file, put in metadata directory
+                            archive_path = 'metadata' / metadata_path.name
+                            archive_path_str = str(archive_path).replace('\\', '/')
+                            if archive_path_str not in added_files:
+                                zipf.write(metadata_path, archive_path)
+                                added_files.add(archive_path_str)
+            
+            # Add configuration files from src/config/
+            config_dir = source_path.parent / 'src' / 'config'
+            if config_dir.exists():
+                for config_file in config_dir.glob('*.yaml'):
+                    if config_file.is_file():
+                        archive_path = 'config' / config_file.name
+                        archive_path_str = str(archive_path).replace('\\', '/')
+                        if archive_path_str not in added_files:
+                            zipf.write(config_file, archive_path)
+                            added_files.add(archive_path_str)
+                            self.logger.info(f"Added config file: {config_file.name}")
+            
+            # Add validation scripts
+            project_root = source_path.parent
+            
+            # Add validate_models.bat from root directory
+            validate_bat = project_root / 'validate_models.bat'
+            if validate_bat.exists():
+                archive_path = 'scripts/validate_models.bat'
+                archive_path_str = str(archive_path).replace('\\', '/')
+                if archive_path_str not in added_files:
+                    zipf.write(validate_bat, archive_path)
+                    added_files.add(archive_path_str)
+                    self.logger.info("Added validate_models.bat")
+            
+            # Add validate_models.py from scripts directory
+            validate_py = project_root / 'scripts' / 'validate_models.py'
+            if validate_py.exists():
+                archive_path = 'scripts/validate_models.py'
+                archive_path_str = str(archive_path).replace('\\', '/')
+                if archive_path_str not in added_files:
+                    zipf.write(validate_py, archive_path)
+                    added_files.add(archive_path_str)
+                    self.logger.info("Added validate_models.py")
+            
+            # Add requirements.txt from root directory
+            requirements_txt = project_root / 'requirements.txt'
+            if requirements_txt.exists():
+                archive_path = 'requirements.txt'
+                archive_path_str = str(archive_path).replace('\\', '/')
+                if archive_path_str not in added_files:
+                    zipf.write(requirements_txt, archive_path)
+                    added_files.add(archive_path_str)
+                    self.logger.info("Added requirements.txt")
+            else:
+                # Generate a basic requirements.txt if it doesn't exist
+                basic_requirements = """# Basic requirements for model deployment
+numpy>=1.21.0
+pandas>=1.3.0
+scipy>=1.7.0
+scikit-learn>=1.0.0
+lightgbm>=3.2.0
+torch>=1.9.0
+tensorflow>=2.6.0
+ta>=0.7.0
+ccxt>=1.50.0
+pyyaml>=5.4.0
+requests>=2.25.0
+"""
+                zipf.writestr('requirements.txt', basic_requirements)
+                added_files.add('requirements.txt')
+                self.logger.info("Generated basic requirements.txt")
         
         result = {
             'package_path': str(output_path.absolute()),
@@ -198,6 +277,43 @@ class CrossPlatformTransfer:
                 for metadata_file in metadata_dir.iterdir():
                     if metadata_file.is_file():
                         shutil.copy2(metadata_file, metadata_dest / metadata_file.name)
+            
+            # Import configuration files
+            config_dir = temp_dir / 'config'
+            if config_dir.exists():
+                project_root = dest_path.parent
+                config_dest = project_root / 'src' / 'config'
+                config_dest.mkdir(parents=True, exist_ok=True)
+                for config_file in config_dir.iterdir():
+                    if config_file.is_file() and config_file.suffix == '.yaml':
+                        shutil.copy2(config_file, config_dest / config_file.name)
+                        self.logger.info(f"Imported config file: {config_file.name}")
+            
+            # Import validation scripts
+            scripts_dir = temp_dir / 'scripts'
+            if scripts_dir.exists():
+                project_root = dest_path.parent
+                
+                # Import validate_models.bat to root directory
+                validate_bat = scripts_dir / 'validate_models.bat'
+                if validate_bat.exists():
+                    shutil.copy2(validate_bat, project_root / 'validate_models.bat')
+                    self.logger.info("Imported validate_models.bat")
+                
+                # Import validate_models.py to scripts directory
+                validate_py = scripts_dir / 'validate_models.py'
+                if validate_py.exists():
+                    scripts_dest = project_root / 'scripts'
+                    scripts_dest.mkdir(exist_ok=True)
+                    shutil.copy2(validate_py, scripts_dest / 'validate_models.py')
+                    self.logger.info("Imported validate_models.py")
+            
+            # Import requirements.txt
+            requirements_file = temp_dir / 'requirements.txt'
+            if requirements_file.exists():
+                project_root = dest_path.parent
+                shutil.copy2(requirements_file, project_root / 'requirements.txt')
+                self.logger.info("Imported requirements.txt")
             
             result = {
                 'imported_models': manifest['total_models'],
@@ -323,8 +439,11 @@ class CrossPlatformTransfer:
                                 'full_path': str(latest_model),
                                 'size_bytes': self._get_directory_size(latest_model)
                             })
+                            
+                            # Scan for metadata files within this model directory
+                            self._scan_model_metadata(latest_model, models_dir, models_info['metadata'])
         
-        # Scan for metadata files
+        # Scan for metadata files in separate metadata directory
         metadata_dir = models_dir / 'metadata'
         if metadata_dir.exists():
             for metadata_file in metadata_dir.iterdir():
@@ -337,6 +456,31 @@ class CrossPlatformTransfer:
                     })
         
         return models_info
+    
+    def _scan_model_metadata(self, model_dir: Path, models_root: Path, metadata_list: list) -> None:
+        """
+        Scan for metadata files within a specific model directory.
+        
+        Args:
+            model_dir: The model directory to scan
+            models_root: The root models directory for relative path calculation
+            metadata_list: List to append found metadata files to
+        """
+        if not model_dir.exists() or not model_dir.is_dir():
+            return
+        
+        # Look for common metadata file names
+        metadata_filenames = ['imported_metadata.json', 'metadata.json', 'model_metadata.json']
+        
+        for filename in metadata_filenames:
+            metadata_file = model_dir / filename
+            if metadata_file.exists() and metadata_file.is_file():
+                metadata_list.append({
+                    'name': metadata_file.name,
+                    'path': str(metadata_file.relative_to(models_root)),
+                    'full_path': str(metadata_file),
+                    'size_bytes': metadata_file.stat().st_size
+                })
     
     def _find_latest_model(self, symbol_dir: Path) -> Optional[Path]:
         """

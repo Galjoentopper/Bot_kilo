@@ -27,6 +27,8 @@ import pandas as pd
 import logging
 from pathlib import Path
 
+from src.config import ConfigLoader
+
 # Configure logging with Windows-compatible encoding
 import sys
 if sys.platform == 'win32':
@@ -53,11 +55,9 @@ class ConfigBasedCollector:
         self.script_dir = Path(__file__).parent
         self.project_root = self.script_dir.parent
         
-        # Load configuration
-        if config_path is None:
-            config_path = self.project_root / 'config' / 'config_training.yaml'
-        
-        self.config = self.load_config(config_path)
+        # Load configuration using ConfigLoader
+        config_loader = ConfigLoader()
+        self.config = config_loader.load_config(config_path)
         self.data_config = self.config.get('data', {})
         
         # Extract data parameters
@@ -82,16 +82,7 @@ class ConfigBasedCollector:
         
         self.print_config()
     
-    def load_config(self, config_path: Path) -> Dict[str, Any]:
-        """Load configuration from YAML file"""
-        try:
-            with open(config_path, 'r', encoding='utf-8') as f:
-                config = yaml.safe_load(f)
-            logger.info(f"[SUCCESS] Loaded config from: {config_path}")
-            return config
-        except Exception as e:
-            logger.error(f"[ERROR] Failed to load config from {config_path}: {e}")
-            sys.exit(1)
+
     
     def print_config(self):
         """Print configuration summary"""

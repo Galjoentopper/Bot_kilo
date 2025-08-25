@@ -31,8 +31,8 @@ if ! command -v python3 &> /dev/null; then
 fi
 
 # Check if we're in the right directory
-if [ ! -f "src/config/config.yaml" ]; then
-    echo "ERROR: config.yaml not found. Are you in the Bot_kilo directory?"
+if [ ! -f "src/config/config_training.yaml" ]; then
+    echo "ERROR: config_training.yaml not found. Are you in the Bot_kilo directory?"
     echo "Current directory: $(pwd)"
     echo "Please navigate to the Bot_kilo directory and run this script again"
     exit 1

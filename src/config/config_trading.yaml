@@ -3,7 +3,7 @@
 
 # Data Configuration
 data:
-  symbols: ['BTCEUR', 'ETHEUR', 'ADAEUR', 'DOTEUR', 'LINKEUR']
+  symbols: ['BTCEUR', 'ETHEUR', 'ADAEUR', 'DOTEUR', 'LINKEUR']  # Only symbols with available models
   interval: '30m'
   lookback_days: 30  # Reduced for faster loading
   cache_duration: 300  # 5 minutes cache
@@ -27,6 +27,14 @@ trading:
   # Position management
   max_positions: 3
   position_timeout: 86400  # 24 hours
+
+# Risk Management Configuration
+risk_management:
+  max_position_size: 0.1
+  stop_loss: 0.02
+  take_profit: 0.04
+  max_daily_loss: 0.05
+  max_drawdown: 0.1
 
 # Model Configuration (for inference only)
 models:
@@ -143,8 +151,8 @@ monitoring:
 # Notifications
 notifications:
   telegram:
-    enabled: false  # Set to true and add credentials if needed
-    bot_token: '7733436451:AAH6Sls8uL4fEgd6Ty7VEKSBIMauhaVkN4c
+    enabled: true  # Set to true and add credentials if needed
+    bot_token: '7733436451:AAH6Sls8uL4fEgd6Ty7VEKSBIMauhaVkN4c'
     chat_id: '7988790407'
     
     # Notification triggers

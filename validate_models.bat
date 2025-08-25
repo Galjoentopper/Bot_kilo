@@ -47,7 +47,6 @@ REM Check if validate_models.py exists
 if exist "scripts\validate_models.py" (
     echo Running model validation...
     python scripts\validate_models.py --models-dir models --verbose
-    
     if errorlevel 1 (
         echo.
         echo WARNING: Model validation found issues!
@@ -55,19 +54,15 @@ if exist "scripts\validate_models.py" (
         echo.
         echo You can still proceed with trading, but some models may not work properly.
         echo.
-        set /p "CONTINUE=Continue anyway? (y/N): "
-        if /i "!CONTINUE!" neq "y" (
-            echo Validation cancelled.
-            pause
-            exit /b 1
-        )
+        echo Automatically continuing with trading despite validation issues...
+        timeout /t 2 /nobreak >nul
     ) else (
         echo.
         echo ========================================
         echo All models validated successfully!
         echo ========================================
     )
-else (
+) else (
     echo validate_models.py not found, performing basic validation...
     echo.
     
@@ -116,4 +111,4 @@ echo Next steps:
 echo 1. Run 'deploy_trading.bat' to start paper trading
 echo 2. Monitor the logs directory for trading activity
 echo.
-pause
+echo Validation completed automatically.

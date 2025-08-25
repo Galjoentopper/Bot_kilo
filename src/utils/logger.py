@@ -13,6 +13,45 @@ from datetime import datetime
 from typing import Optional, Dict, Any
 import yaml
 
+# NOTE:
+# The enhanced_trader script expects `from src.utils.logger import Logger`.
+# Previously no `Logger` class existed, causing ImportError. We add a thin
+# wrapper class (`Logger`) that initializes the logging system using
+# `setup_logging` and exposes the underlying `logging.Logger` instance via
+# the attribute `logger`, matching the usage pattern `self.logger.logger.info(...)`.
+# This keeps backward compatibility with existing helper functions / classes.
+
+class Logger:
+    """Simple wrapper providing a `.logger` attribute for compatibility.
+
+    Usage in code: `from src.utils.logger import Logger`; instance attribute
+    `logger` is the configured logging.Logger.
+    """
+
+    def __init__(
+        self,
+        name: str = "crypto_trading_bot",
+        config: Optional[Dict[str, Any]] = None,
+        log_level: str = "INFO",
+        log_file: Optional[str] = "logs/trading.log",
+    ) -> None:
+        # Initialize (idempotent) global logging configuration.
+        base_logger = setup_logging(
+            config=config,
+            log_level=log_level,
+            log_file=log_file,
+        )
+        # If a different name requested, get that child logger; else reuse.
+        if name != base_logger.name:
+            self.logger = logging.getLogger(name)
+        else:
+            self.logger = base_logger
+
+    def get_child(self, suffix: str) -> logging.Logger:
+        """Return a child logger of the wrapped logger."""
+        return self.logger.getChild(suffix)
+
+
 def setup_logging(
     config: Optional[Dict[str, Any]] = None,
     log_level: str = "INFO",

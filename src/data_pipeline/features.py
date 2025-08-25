@@ -1008,11 +1008,11 @@ class FeatureEngine:
             if col_abs_max > 1000000:  # 1M+ (extreme outliers)
                 features_df[col] = np.clip(features_df[col], -500000, 500000)
                 clipped_features.append((col, col_abs_max))
-                logger.warning(f"Intermediate clipping [-500k, 500k] on '{col}' {stage} (was {col_abs_max:.2f})")
+                logger.debug(f"Intermediate clipping [-500k, 500k] on '{col}' {stage} (was {col_abs_max:.2f})")
             elif col_abs_max > 200000:  # 200k+ (very high values)
                 features_df[col] = np.clip(features_df[col], -150000, 150000)
                 clipped_features.append((col, col_abs_max))
-                logger.warning(f"Intermediate clipping [-150k, 150k] on '{col}' {stage} (was {col_abs_max:.2f})")
+                logger.debug(f"Intermediate clipping [-150k, 150k] on '{col}' {stage} (was {col_abs_max:.2f})")
             elif col_abs_max > 50000:  # 50k+ (moderately high values - still reasonable for BTC)
                 # Only clip if it's truly excessive (>200k) - 50k-200k is normal for BTC
                 if col_abs_max > 200000:

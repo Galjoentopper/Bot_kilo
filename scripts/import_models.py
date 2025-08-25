@@ -29,6 +29,7 @@ except ImportError:
 
 from src.utils.logger import setup_logging
 from src.utils.model_transfer import ModelTransferManager
+from src.utils.model_packaging import ModelPackager
 
 
 class ModelImporter:
@@ -77,10 +78,131 @@ class ModelImporter:
             with zipfile.ZipFile(bundle_path, 'r') as zip_ref:
                 zip_ref.extractall(temp_dir)
             
-            # Find and load manifest
+            # Try transfer_manifest.json (directory-style bundle) first; fallback to bundle_info.json (package-style)
             manifest_path = temp_dir / 'transfer_manifest.json'
-            if not manifest_path.exists():
-                raise FileNotFoundError("Transfer manifest not found in bundle")
+            bundle_info_path = temp_dir / 'bundle_info.json'
+            
+            if manifest_path.exists():
+                with open(manifest_path, 'r') as f:
+                    manifest = json.load(f)
+                
+                self.logger.info(f"Found {len(manifest['models'])} models in bundle (manifest)")
+                
+                # Backup existing models if requested
+                if backup_existing:
+                    self._backup_existing_models()
+                
+                # Import each model (directory-style)
+                import_results = {
+                    'total_models': len(manifest['models']),
+                    'imported_models': 0,
+                    'failed_models': 0,
+                    'warnings': [],
+                    'errors': [],
+                    'details': []
+                }
+                
+                for model_info in manifest['models']:
+                    try:
+                        result = self._import_single_model(temp_dir, model_info)
+                        import_results['details'].append(result)
+                        
+                        if result['status'] == 'success':
+                            import_results['imported_models'] += 1
+                        else:
+                            import_results['failed_models'] += 1
+                            
+                        if result.get('warnings'):
+                            import_results['warnings'].extend(result['warnings'])
+                            
+                    except Exception as e:
+                        error_msg = f"Failed to import {model_info.get('model_type', 'unknown')}/{model_info.get('symbol', 'unknown')}: {str(e)}"
+                        self.logger.error(error_msg)
+                        import_results['errors'].append(error_msg)
+                        import_results['failed_models'] += 1
+                
+                # Validate imported models if requested
+                if validate_after_import and import_results['imported_models'] > 0:
+                    self.logger.info("Validating imported models...")
+                    validation_results = self._validate_imported_models()
+                    import_results['validation'] = validation_results
+                
+                self._log_import_summary(import_results)
+                return import_results
+            
+            elif bundle_info_path.exists():
+                # Package-style bundle created by ModelPackager.create_transfer_bundle
+                with open(bundle_info_path, 'r') as f:
+                    bundle_info = json.load(f)
+                
+                packages = bundle_info.get('packages', [])
+                self.logger.info(f"Found {len(packages)} packaged models in bundle (bundle_info)")
+                
+                # Backup existing models if requested
+                if backup_existing:
+                    self._backup_existing_models()
+                
+                import_results = {
+                    'total_models': len(packages),
+                    'imported_models': 0,
+                    'failed_models': 0,
+                    'warnings': [],
+                    'errors': [],
+                    'details': []
+                }
+                
+                packager = ModelPackager()
+                for pkg in packages:
+                    model_type = pkg.get('type') or pkg.get('model_type') or 'unknown'
+                    symbol = pkg.get('symbol', 'unknown')
+                    file_name = pkg.get('file') or pkg.get('path')
+                    detail = {
+                        'model_type': model_type,
+                        'symbol': symbol,
+                        'status': 'unknown',
+                        'warnings': [],
+                        'errors': []
+                    }
+                    
+                    if not file_name:
+                        detail['status'] = 'failed'
+                        detail['errors'].append('Package file missing in bundle_info')
+                        import_results['details'].append(detail)
+                        import_results['failed_models'] += 1
+                        continue
+                    
+                    package_file = temp_dir / file_name
+                    try:
+                        # Create proper target directory: models/model_type/symbol/
+                        target_dir = self.models_dir / model_type / symbol
+                        target_dir.mkdir(parents=True, exist_ok=True)
+                        
+                        self.logger.info(f"Importing {model_type}/{symbol} to {target_dir}")
+                        res = packager.import_model(str(package_file), target_dir=str(target_dir))
+                        # res is typically a dict mapping package name to destination path
+                        if isinstance(res, dict) and res:
+                            dest = list(res.values())[0]
+                            detail['destination'] = dest
+                        detail['status'] = 'success'
+                        import_results['imported_models'] += 1
+                    except Exception as e:
+                        detail['status'] = 'failed'
+                        detail['errors'].append(f"Import error: {e}")
+                        import_results['failed_models'] += 1
+                    
+                    import_results['details'].append(detail)
+                
+                # Validate imported models if requested
+                if validate_after_import and import_results['imported_models'] > 0:
+                    self.logger.info("Validating imported models...")
+                    validation_results = self._validate_imported_models()
+                    import_results['validation'] = validation_results
+                
+                self._log_import_summary(import_results)
+                return import_results
+            
+            else:
+                raise FileNotFoundError("Transfer manifest not found in bundle and no bundle_info.json present")
             
             with open(manifest_path, 'r') as f:
                 manifest = json.load(f)
@@ -347,6 +469,9 @@ def main():
     
     args = parser.parse_args()
     
+    # Ensure logs directory exists before attaching FileHandler
+    os.makedirs('logs', exist_ok=True)
+    
     # Setup logging
     log_level = logging.DEBUG if args.verbose else logging.INFO
     logging.basicConfig(
@@ -359,9 +484,6 @@ def main():
     )
     
     logger = logging.getLogger(__name__)
-    
-    # Create logs directory if it doesn't exist
-    os.makedirs('logs', exist_ok=True)
     
     logger.info(f"Starting model import from: {args.bundle_path}")
     

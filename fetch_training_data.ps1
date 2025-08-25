@@ -3,7 +3,7 @@
 # Streamlined data collection orchestrator for Binance training data
 
 # Configuration
-$CONFIG_FILE = "config/config_training.yaml"
+$CONFIG_FILE = "src/config/config_training.yaml"
 $COLLECTOR_SCRIPT = "data/config_based_collector.py"
 $DATA_DIR = "data"
 

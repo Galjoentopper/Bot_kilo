@@ -26,26 +26,49 @@ if not exist "scripts" (
 echo Checking for transfer packages...
 echo.
 
-REM Look for transfer packages
+REM Look for transfer packages (or use the provided argument)
 set "PACKAGE_FOUND=0"
 set "TRANSFER_PACKAGE="
-for %%f in (*.zip) do (
-    echo Found transfer package: %%f
-    set "PACKAGE_FOUND=1"
-    set "TRANSFER_PACKAGE=%%f"
+
+REM If an argument is provided, and it exists, use it directly
+if not "%~1"=="" (
+    if exist "%~1" (
+        set "TRANSFER_PACKAGE=%~1"
+        set "PACKAGE_FOUND=1"
+        echo Using transfer package (from argument): %~1
+    )
 )
 
-if !PACKAGE_FOUND!==0 (
-    echo No transfer packages found in current directory.
-    echo.
-    echo Please copy your transfer package (*.zip) to this directory and run again.
-    echo The transfer package should be created on your Linux training computer using:
-    echo   ./train_models.sh
-    echo.
-    echo Or manually create a package using:
-    echo   python scripts/cross_platform_transfer.py create --source ./models --output transfer_package.zip
-    pause
-    exit /b 1
+REM If not provided or not found, search current directory
+if "!PACKAGE_FOUND!"=="0" (
+    for %%f in (*.zip) do (
+        echo Found transfer package: %%f
+        set "PACKAGE_FOUND=1"
+        set "TRANSFER_PACKAGE=%%f"
+        goto :afterSearch
+    )
+)
+
+:afterSearch
+
+REM Handle missing/invalid argument or no zip found
+if "!PACKAGE_FOUND!"=="0" (
+    if not "%~1"=="" (
+        echo ERROR: Provided package not found: %~1
+        pause
+        exit /b 1
+    ) else (
+        echo No transfer packages found in current directory.
+        echo.
+        echo Please copy your transfer package (*.zip) to this directory and run again.
+        echo The transfer package should be created on your Linux training computer using:
+        echo   ./train_models.sh
+        echo.
+        echo Or manually create a package using:
+        echo   python scripts/cross_platform_transfer.py create --source ./models --output transfer_package.zip
+        pause
+        exit /b 1
+    )
 )
 
 echo Using transfer package: !TRANSFER_PACKAGE!

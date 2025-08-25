@@ -39,6 +39,7 @@ from src.models.gru_trainer import GRUTrainer
 from src.models.lgbm_trainer import LightGBMTrainer
 from src.models.ppo_trainer import PPOTrainer
 from src.notifier.telegram import TelegramNotifier
+from src.config.config_loader import ConfigLoader
 
 
 class ModelMetadata:
@@ -1364,12 +1365,11 @@ class UnifiedPaperTrader:
         return int(wait)
 
 
-def load_config(config_path: str = "src/config/config.yaml") -> Dict[str, Any]:
-    """Load configuration from YAML file."""
+def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
+    """Load configuration using ConfigLoader with auto-detection."""
     try:
-        with open(config_path, 'r') as f:
-            config = yaml.safe_load(f)
-        return config
+        config_loader = ConfigLoader(config_path)
+        return config_loader.config
     except Exception as e:
         print(f"Error loading config: {e}")
         return {}
@@ -1378,7 +1378,7 @@ def load_config(config_path: str = "src/config/config.yaml") -> Dict[str, Any]:
 async def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(description='Unified Crypto Trading Bot')
-    parser.add_argument('--config', type=str, default='src/config/config.yaml',
+    parser.add_argument('--config', type=str, default=None,
                        help='Path to configuration file')
     parser.add_argument('--models-dir', type=str, default='./models',
                        help='Directory containing trained models')

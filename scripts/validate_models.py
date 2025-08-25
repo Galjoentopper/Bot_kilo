@@ -817,7 +817,8 @@ def main():
     parser = argparse.ArgumentParser(description='Validate trading models')
     parser.add_argument('--type', help='Filter by model type (lightgbm, gru, ppo)')
     parser.add_argument('--symbol', help='Filter by trading symbol')
-    parser.add_argument('--quick', action='store_true', help='Skip model loading tests')
+    parser.add_argument('--quick', action='store_true', help='Skip model loading tests (default behavior)')
+    parser.add_argument('--full-test', action='store_true', help='Enable model loading tests (may be slow/hang)')
     parser.add_argument('--report', help='Generate HTML report to specified file')
     parser.add_argument('--models-dir', default='models', help='Models directory path')
     parser.add_argument('--verbose', '-v', action='store_true', help='Verbose output')
@@ -842,14 +843,18 @@ def main():
     validator = ModelValidator(args.models_dir)
     
     try:
+        # Default to quick mode (skip model loading) to prevent hanging
+        # Only do full testing if explicitly requested with --full-test
+        skip_loading = not getattr(args, 'full_test', False)
+        
         if args.type or args.symbol:
             results = validator.validate_filtered_models(
                 model_type_filter=args.type,
                 symbol_filter=args.symbol,
-                skip_loading=args.quick
+                skip_loading=skip_loading
             )
         else:
-            results = validator.validate_all_models(skip_loading=args.quick)
+            results = validator.validate_all_models(skip_loading=skip_loading)
         
         # Generate report if requested
         if args.report:

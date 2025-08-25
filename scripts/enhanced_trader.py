@@ -48,6 +48,11 @@ from src.notifier.telegram_notifier import TelegramNotifier
 from src.utils.model_packaging import ModelPackager
 from src.utils.model_transfer import ModelTransferManager
 
+# Enable debug logging temporarily
+import os
+import logging
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
 @dataclass
 class ModelMetadata:
     """Enhanced model metadata for robust loading."""
@@ -66,16 +71,26 @@ class ModelMetadata:
 class EnhancedUnifiedPaperTrader:
     """Enhanced paper trader with robust model loading capabilities."""
     
-    def __init__(self, config_path: str = 'config.yaml', models_dir: str = 'models'):
+    def __init__(self, config_path: str = None, models_dir: str = 'models'):
         """Initialize the enhanced trader."""
-        self.config = ConfigLoader(config_path).config
+        # Use auto-detection if no config path specified, otherwise use explicit path
+        if config_path:
+            self.config = ConfigLoader(config_path).config
+        else:
+            self.config = ConfigLoader().config
         self.models_dir = Path(models_dir)
         self.logger = Logger(name='enhanced_trader')
         
         # Initialize components
         self.feature_engine = FeatureEngine()
         self.trading_metrics = TradingMetrics()
-        self.telegram_notifier = TelegramNotifier(self.config)
+        
+        # Initialize Telegram notifier with proper parameters
+        telegram_config = self.config.get('telegram', {})
+        bot_token = telegram_config.get('bot_token', '')
+        chat_id = telegram_config.get('chat_id', '')
+        telegram_enabled = telegram_config.get('enabled', False)
+        self.telegram_notifier = TelegramNotifier(bot_token, chat_id, telegram_enabled)
         
         # Model management
         self.model_packager = ModelPackager()
@@ -461,6 +476,9 @@ class EnhancedUnifiedPaperTrader:
                             if col in df_with_features.columns:
                                 df_aligned[col] = df_with_features[col]
                         df_with_features = df_aligned
+                    else:
+                        # If no metadata available, use all generated features
+                        feature_names = [col for col in df_with_features.columns if col not in ['open', 'high', 'low', 'close', 'volume']]
                     
                     # Clean features
                     df_with_features = self._clean_features_for_inference(df_with_features, symbol)
@@ -630,7 +648,11 @@ class EnhancedUnifiedPaperTrader:
                     continue
                 
                 # Get feature names for this symbol
-                feature_names = self.symbol_feature_metadata.get(symbol, self.feature_engine.get_feature_names(df))
+                feature_names = self.symbol_feature_metadata.get(symbol, [])
+                if not feature_names:
+                    # If no metadata available, use all generated features except OHLCV
+                    feature_names = [col for col in df.columns if col not in ['open', 'high', 'low', 'close', 'volume']]
+                
                 features_for_supervised = df.reindex(columns=feature_names, fill_value=0).copy()
                 features_for_supervised = features_for_supervised.ffill().bfill().fillna(0)
                 
@@ -887,7 +909,7 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(description='Enhanced Unified Paper Trader')
-    parser.add_argument('--config', default='config.yaml', help='Configuration file path')
+    parser.add_argument('--config', default=None, help='Configuration file path (auto-detects if not specified)')
     parser.add_argument('--models-dir', default='models', help='Models directory path')
     parser.add_argument('--iterations', type=int, help='Number of trading iterations (default: infinite)')
     parser.add_argument('--validate-models', action='store_true', help='Validate all models before trading')

@@ -43,8 +43,8 @@ class EnvironmentManager:
         self.config_dir.mkdir(exist_ok=True)
         
         # Configuration file paths
-        self.training_config = self.config_dir / 'config_training.yaml'
-        self.trading_config = self.config_dir / 'config_trading.yaml'
+        self.training_config = self.project_root / 'src' / 'config' / 'config_training.yaml'
+        self.trading_config = self.project_root / 'src' / 'config' / 'config_trading.yaml'
         self.active_config = self.project_root / 'config.yaml'
         self.env_info_file = self.config_dir / 'environment_info.yaml'
         

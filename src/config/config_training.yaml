@@ -8,6 +8,18 @@ data:
   lookback_days: 365
   validation_split: 0.2
   test_split: 0.1
+
+# Trainer Configuration
+trainer:
+  symbols: ['BTCEUR', 'ETHEUR', 'ADAEUR', 'DOTEUR', 'LINKEUR']
+  interval: '30m'
+  target_type: 'return'
+  default_target_horizon: 1
+  n_splits: 5
+  embargo: 100
+  fee_bps: 10.0
+  optuna_trials: 100
+  default_models: ['gru', 'lightgbm', 'ppo']
   
 # Training Configuration
 training:

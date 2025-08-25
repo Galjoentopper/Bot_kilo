@@ -39,12 +39,14 @@ from src.utils.metrics import TradingMetrics, optimize_threshold
 from src.utils.calibration import ProbabilityCalibrator
 from src.models.adapters import create_model_adapter
 from src.notifier.telegram import TelegramNotifier
+from src.config.config_loader import ConfigLoader
 
 
-def load_config(config_path: str = "src/config/config.yaml") -> Dict[str, Any]:
+def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
+    """Load configuration using ConfigLoader with auto-detection."""
     try:
-        with open(config_path, 'r') as f:
-            return yaml.safe_load(f)
+        config_loader = ConfigLoader(config_path)
+        return config_loader.config
     except Exception as e:
         print(f"Error loading config: {e}")
         return {}
@@ -96,7 +98,7 @@ def main() -> None:
     if len(sys.argv) == 1:
         try:
             # Load default config
-            config = load_config('src/config/config.yaml')
+            config = load_config()
             # Import early so names are bound before use
             from scripts.walk_forward_optuna import run_walk_forward_optuna  # type: ignore
             logger = setup_logging(config)
@@ -184,7 +186,7 @@ def main() -> None:
         description='Unified Enhanced Trainer',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
-    parser.add_argument('--config', type=str, default='src/config/config.yaml')
+    parser.add_argument('--config', type=str, default=None)
     parser.add_argument('--data-dir', type=str, default='./data')
     parser.add_argument('--output-dir', type=str, default='./models')
     parser.add_argument('--models', type=str, nargs='+', choices=['gru','lightgbm','ppo','all'], default=None)

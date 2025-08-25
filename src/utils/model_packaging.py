@@ -409,9 +409,13 @@ This package can be imported using the ModelPackager.import_model() method.
             bundle_info = {
                 "created_at": datetime.now().isoformat(),
                 "packages": [],
+                "config_files": [],
+                "validation_scripts": [],
+                "requirements_included": False,
                 "transfer_instructions": "Extract this bundle and use ModelPackager.import_model() for each package"
             }
             
+            # Add model packages
             for pkg in selected_packages:
                 pkg_path = Path(pkg["file"])
                 bundle_zip.write(pkg_path, pkg_path.name)
@@ -422,6 +426,38 @@ This package can be imported using the ModelPackager.import_model() method.
                     "file": pkg_path.name
                 })
             
+            # Add configuration files from src/config/
+            project_root = Path(self.base_dir).parent.parent if 'models' in str(self.base_dir) else Path(self.base_dir).parent
+            config_dir = project_root / "src" / "config"
+            
+            config_files = ["config_trading.yaml", "config_training.yaml"]
+            for config_file in config_files:
+                config_path = config_dir / config_file
+                if config_path.exists():
+                    bundle_zip.write(config_path, f"config/{config_file}")
+                    bundle_info["config_files"].append(f"config/{config_file}")
+                    self.logger.info(f"Added config file: {config_file}")
+            
+            # Add validation scripts
+            validation_files = [
+                ("validate_models.bat", "validate_models.bat"),
+                ("scripts/validate_models.py", "scripts/validate_models.py")
+            ]
+            
+            for src_path, bundle_path in validation_files:
+                full_path = project_root / src_path
+                if full_path.exists():
+                    bundle_zip.write(full_path, bundle_path)
+                    bundle_info["validation_scripts"].append(bundle_path)
+                    self.logger.info(f"Added validation script: {bundle_path}")
+            
+            # Add requirements.txt if it exists
+            requirements_path = project_root / "requirements.txt"
+            if requirements_path.exists():
+                bundle_zip.write(requirements_path, "requirements.txt")
+                bundle_info["requirements_included"] = True
+                self.logger.info("Added requirements.txt")
+            
             # Add bundle info
             bundle_zip.writestr("bundle_info.json", json.dumps(bundle_info, indent=2))
             
@@ -430,6 +466,7 @@ This package can be imported using the ModelPackager.import_model() method.
             bundle_zip.writestr("import_models.py", transfer_script)
         
         self.logger.info(f"Transfer bundle created: {output_path}")
+        self.logger.info(f"Bundle includes: {len(selected_packages)} models, {len(bundle_info['config_files'])} config files, {len(bundle_info['validation_scripts'])} validation scripts")
         return str(output_path)
     
     def _generate_transfer_script(self) -> str:
